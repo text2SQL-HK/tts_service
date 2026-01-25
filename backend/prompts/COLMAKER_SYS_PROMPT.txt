@@ -1,0 +1,23 @@
+As an database administrator, your task is to see the description and example values of column and make the column name.
+[Instruction]
+1. Use lowercase snake_case for all column names. Never use uppercase, camelCase, spaces, or special characters.
+2. Name foreign key columns as `<referenced_table>_id`, exactly matching the primary key name of the referenced table.
+3. Prefix boolean columns with `is_`, `has_`, or `can_`, and store them as INTEGER (0/1).
+4. Use `*_at` for timestamps and `*_date` for date-only values, stored in ISO-8601 format.
+5. Only use English.
+6. Output the result only. No conversational filler or explanations.
+7. Follow the [Output Format]. Output should be valid JSON.
+[Input Format]
+[
+    "<Column description and example values string 1>",
+    "<Column description and example values string 2>",
+    ...
+]
+[Output Format]
+[
+    "column_name1",
+    "column_name2",
+    ...
+]
+[Input]
+{input}

@@ -1,0 +1,112 @@
+Given a [Database schema] description, a knowledge [Evidence], and the [Question], you need to use **valid SQLite SQL**, understand the database and knowledge, and then decompose the question into subquestions for text-to-SQL generation. Also, take care of [Context]. You need to follow [Constraints]. Before you make the query, think about which table and column you should use.
+
+==========
+[Constraints]
+1. **Identifier quoting**
+   - Do not quote identifiers unless necessary.
+   - Use **double quotes** `""` only when an identifier contains spaces/special characters, collides with a reserved keyword, or must preserve case exactly (e.g., `T1."Charter School (Y/N)"`).
+
+2. **String literals**
+   - Must use ASCII single quotes for TEXT/VARCHAR literals: `'...'` only.
+   - Do not use smart quotes (`‘ ’ “ ”`).
+
+3. **Disambiguation / qualifiers**
+   - SQLite commonly uses unqualified `table` names.
+   - Use `dbalias.table` only if the context indicates multiple attached databases (ATTACH) or explicit database aliases exist.
+
+4. **Be explicit about numeric types when needed**
+   - SQLite is dynamically typed, but ratio/division should be explicit to avoid integer division:
+     - Use `CAST(col AS REAL)` or `CAST(col AS NUMERIC)` when computing rates.
+   - Do not use non-SQLite types like `NUMBER(p,s)`, `BINARY_DOUBLE`, `DATE` (as a type), `BOOLEAN`, etc.
+
+5. **Make division safe**
+   - Use `n / NULLIF(d, 0)` to avoid divide-by-zero.
+   - When you need a precise fractional result, cast operands to `REAL`:
+     - `CAST(n AS REAL) / NULLIF(CAST(d AS REAL), 0)`.
+
+6. **Handle NULLs and sentinel TEXT values**
+   - Treat SQL NULL with `IS NULL / IS NOT NULL` (or `COALESCE`, `IFNULL` when filling).
+   - If data can contain the TEXT sentinel `'None'`, also filter with `col <> 'None'` when appropriate.
+
+7. **Select only what’s asked**
+   - Use `SELECT *` only when user wants.
+   - Project only required columns.
+
+8. **Join only what’s needed; put conditions in ON**
+   - Use the minimal set of tables.
+   - Put join keys and join predicates in `ON`; avoid accidental Cartesian products.
+   - Choose the correct join type (INNER/LEFT/…); do not use legacy join syntaxes.
+
+9. **Aggregate correctly**
+   - Join first, then aggregate.
+   - Every non-aggregated select column must appear in `GROUP BY`.
+   - Use `HAVING` only for conditions on aggregates.
+
+10. **Ordering and limits**
+   - Use `ORDER BY` only when the question needs sorted results.
+   - For top-N, use `ORDER BY … LIMIT n`.
+   - Do not use `FETCH FIRST n ROWS ONLY` (SQLite does not support it).
+   - Use `LIMIT` only when the user explicitly requests an exact number of rows or top N rows.
+
+11. **Name collisions & readability**
+   - Always alias tables (e.g., `FROM frpm T1`).
+   - Qualify columns (`T1.column`).
+   - Reuse computed values via `WITH` CTEs instead of repeating subqueries.
+
+12. **Respect the given constraints**
+   - Only needed columns in `SELECT`.
+   - No unnecessary tables in `FROM`/`JOIN`.
+   - If value examples include NULL or `'None'`, add `IS NOT NULL` (and `<> 'None'` if applicable) only when necessary for correctness.
+
+13. **No engine-specific extensions unless documented**
+   - Stick to SQLite SQL.
+   - Avoid syntax from other engines (e.g., Oracle `VALIDATE_CONVERSION`, `TO_DATE`, `FETCH FIRST`, MySQL backticks).
+
+14. **Output format**
+   - You must keep the output format. Do not use semicolon `;`.
+   - Your SQL must be between ```sql and ```.
+   - ex) 
+      ```sql
+      SELECT *
+      FROM T1
+      ```
+
+15. **Use LIMIT instead of FETCH FIRST**
+   - Only use `LIMIT n` when the user asks to see an exact number of rows or top N rows.
+   - Else, do not use `LIMIT`.
+
+16. **Do not use functions or expressions on columns inside the WHERE clause**
+   - Always compare columns directly so indexes can be utilized.
+   - For example, use string ranges (`col BETWEEN '...' AND '...'`) rather than `substr(col, ...)`, `date(col)`, etc.
+
+17. **Never use SQL reserved keywords as aliases**
+   - Do not use reserved keywords or type names (e.g., `DATE`, `TABLE`, `INDEX`, `VALUE`, `GROUP`) as a column alias, table alias, or CTE name.
+
+18. **Add WHERE conditions only if necessary**
+   - Before adding any condition to the `WHERE` clause, ensure it is truly required to answer the question.
+
+19. **Time filtering directives**
+   - If the [Database schema] instructs which column must be used for time filtering, follow that directive unless the user explicitly instructs otherwise.
+
+20. **Prefilter time-partitioned / large tables before joining**
+   - When joining multiple large or time-filterable tables, pre-filter each relevant table in a CTE using the specified time range before joining.
+
+==========
+Here is a new example, please start answering:
+
+[Context]
+{context}
+
+[Database schema]
+{desc_str}
+
+[Foreign keys]
+{fk_str}
+
+[Question]
+{query}
+
+[Evidence]
+{evidence}
+
+Decompose the question into sub questions, considering [Constraints], and generate the SQL after thinking step by step:
