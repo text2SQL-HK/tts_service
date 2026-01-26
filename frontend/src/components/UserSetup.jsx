@@ -5,7 +5,7 @@ export default function UserSetup({
   statusMessage,
   errorMessage,
   disabled,
-  onReset,
+  onReset = undefined,
 }) {
   const handleSubmit = (event) => {
     event.preventDefault();
@@ -46,7 +46,4 @@ export default function UserSetup({
   );
 }
 
-UserSetup.defaultProps = {
-  onReset: undefined,
-  errorMessage: "",
-};
+

@@ -164,8 +164,8 @@ def extract_sql(text: str) -> Optional[str]:
     return sql.replace(";", "")
 # --- LLM 세팅 -------------------------------------------------------------------------
 #local_llm = ChatOpenAI(model="/workspace/models/gpt-oss-120b", base_url = "http://127.0.0.1:8000/v1", openai_api_key="dummy", reasoning = {"effort": "medium"})
-local_llm = ChatOpenAI(model="gpt-5.2", temperature=0.0, reasoning={"effort": "medium"})
-mini_llm = ChatOpenAI(model="gpt-5-mini", reasoning={"effort": "low"})
+local_llm = ChatOpenAI(model="gpt-5.2", temperature=0.0)
+mini_llm = ChatOpenAI(model="gpt-5-mini")
 class PromodeOutput(BaseModel):
     is_enough: bool = Field(...)
     llm_question: List[str] = Field(...)

@@ -12,6 +12,10 @@
   --hanta-gray: #9a9b9c;
 }
 
+html {
+  font-size: clamp(10px, 0.5vw + 8px, 14px);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -35,12 +39,12 @@ body {
   position: fixed;
   top: 24px;
   right: 24px;
-  padding: 10px 18px;
+  padding: 8px 14px;
   border-radius: 999px;
   background: var(--orange);
   color: #ffffff;
   font-weight: 600;
-  font: 10px;
+  font-size: 0.75rem;
   text-decoration: none;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
   z-index: 100;
@@ -125,12 +129,13 @@ body {
 }
 
 .user-input-group button {
-  padding: 0 20px;
+  padding: 0 16px;
   border: none;
   border-radius: 12px;
   background: #303030;
   color: white;
   font-weight: 600;
+  font-size: 0.9rem;
   cursor: pointer;
   transition: transform 0.1s ease, box-shadow 0.2s ease;
 }
@@ -157,12 +162,13 @@ body {
 
 .user-reset {
   margin-top: 12px;
-  padding: 8px 16px;
+  padding: 4px 10px;
   border: 1px solid rgba(79, 70, 229, 0.25);
   border-radius: 10px;
   background: #303030;
   color: var(--text-light);
   font-weight: 600;
+  font-size: 0.9rem;
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
 }
@@ -336,12 +342,13 @@ pre[class*="language-"] {
 
 .message.table-message .table-load-more {
   align-self: flex-start;
-  padding: 8px 14px;
+  padding: 4px 8px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-light);
   font-weight: 600;
+  font-size: 0.85rem;
   cursor: pointer;
   transition: background 0.2s ease, transform 0.1s ease;
 }
@@ -373,15 +380,16 @@ pre[class*="language-"] {
 
 .chat-input .add-context-button,
 .chat-input .db-change-button {
-  padding: 10px 18px;
+  padding: 6px 12px;
   border-radius: 18px;
   border: none;
   background: #303030;
   color: var(--text-light);
   font-weight: 600;
+  font-size: 0.9rem;
   cursor: pointer;
   transition: background 0.2s ease, transform 0.1s ease;
-  min-height: 44px;
+  min-height: 38px;
 }
 
 .chat-input .add-context-button:hover:not(:disabled),
@@ -487,7 +495,7 @@ pre[class*="language-"] {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px;
+  padding: 4px 10px;
   border-radius: 999px;
   border: 1px solid rgb(0, 0, 0, 0);
   background: #303030;
@@ -495,20 +503,21 @@ pre[class*="language-"] {
   color: var(--text-light);
   cursor: pointer;
   user-select: none;
-  min-height: 44px;
+  min-height: 38px;
 }
 
 .chat-input .sql-generate-button,
 .chat-input .sql-test-button {
-  padding: 10px 22px;
+  padding: 6px 14px;
   border-radius: 18px;
   border: 1px solid rgb(0, 0, 0, 0);
   background: #303030;
   color: var(--text-light);
   font-weight: 600;
+  font-size: 0.9rem;
   cursor: pointer;
   transition: transform 0.1s ease, box-shadow 0.2s ease;
-  min-height: 44px;
+  min-height: 38px;
 }
 
 .chat-input .sql-generate-button:disabled,
@@ -528,8 +537,8 @@ pre[class*="language-"] {
 
 .sql-switch .switch-track {
   position: relative;
-  width: 42px;
-  height: 22px;
+  width: 34px;
+  height: 18px;
   border-radius: 999px;
   background: #505152;
   transition: background 0.2s ease;
@@ -539,8 +548,8 @@ pre[class*="language-"] {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 2px 4px rgba(17, 24, 39, 0.2);
@@ -552,7 +561,7 @@ pre[class*="language-"] {
 }
 
 .sql-switch input:checked+.switch-track .switch-thumb {
-  transform: translateX(20px);
+  transform: translateX(16px);
 }
 
 .sql-switch .switch-label {
@@ -1279,7 +1288,7 @@ pre[class*="language-"] {
 .global-header {
   flex: 0 0 auto;
   width: 100%;
-  padding: 16px 24px;
+  padding: 8px 24px;
   background: #0d0d0d;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
@@ -1330,7 +1339,7 @@ pre[class*="language-"] {
   overflow: hidden;
   padding: 16px;
   /* Outer spacing */
-  gap: 16px;
+  gap: 0;
   /* Gap between columns */
 }
 
@@ -1343,7 +1352,8 @@ pre[class*="language-"] {
   flex-direction: column;
   background: transparent;
   min-width: 0;
-  gap: 16px;
+  min-width: 0;
+  gap: 0;
   /* Gap between Plot and Table cards */
 }
 
@@ -1416,6 +1426,11 @@ pre[class*="language-"] {
   padding: 16px;
 }
 
+.dashboard-table-section .dashboard-content {
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
 .dashboard-section-title {
   font-size: 1.1rem;
   font-weight: 600;
@@ -1486,4 +1501,76 @@ pre[class*="language-"] {
   max-height: 100%;
   object-fit: contain;
   border-radius: 4px;
+}
+
+.resize-handle {
+  width: 10px;
+  /* Slightly wider for better hit target */
+  cursor: col-resize !important;
+  background: transparent;
+  flex: 0 0 auto;
+  margin: 0;
+  display: flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  transition: background 0.2s ease;
+}
+
+.resize-handle::after {
+  content: "";
+  width: 3px;
+  height: 24px;
+  /* Vertical Pill */
+  background: transparent;
+  transition: background 0.2s ease;
+  border-radius: 4px;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: rgba(236, 102, 8, 0.15);
+  /* Stronger background on hover */
+}
+
+.resize-handle:hover::after,
+.resize-handle:active::after {
+  background: var(--orange);
+  /* Active pill color */
+}
+
+.resize-handle-vertical {
+  height: 10px;
+  cursor: row-resize !important;
+  background: transparent;
+  flex: 0 0 auto;
+  margin: 0;
+  display: flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  width: 100%;
+  transition: background 0.2s ease;
+}
+
+.resize-handle-vertical::after {
+  content: "";
+  height: 3px;
+  width: 24px;
+  /* Horizontal Pill */
+  background: transparent;
+  transition: background 0.2s ease;
+  border-radius: 4px;
+}
+
+.resize-handle-vertical:hover,
+.resize-handle-vertical:active {
+  background: rgba(236, 102, 8, 0.15);
+}
+
+.resize-handle-vertical:hover::after,
+.resize-handle-vertical:active::after {
+  background: var(--orange);
 }

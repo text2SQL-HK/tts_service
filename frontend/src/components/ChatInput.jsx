@@ -23,7 +23,7 @@ const autoExpandTextarea = (element) => {
     parseInt(
       (typeof window !== "undefined" &&
         window.getComputedStyle(element).lineHeight) ||
-        "16",
+      "16",
       10,
     ) || 16;
 
@@ -124,18 +124,18 @@ export default function ChatInput({
   showSqlButton = false,
   sqlRunLoading = false,
   sqlTestLoading = false,
-  onRunSql = () => {},
-  onTestSql = () => {},
+  onRunSql = () => { },
+  onTestSql = () => { },
   onUploadDb = async () => ({}),
   onConvertDb = async () => ({}),
   canAddContext = false,
   onGenerateContextQuestions = async () => [],
-  onSaveContextAnswers = async () => {},
+  onSaveContextAnswers = async () => { },
   onFetchContextNotes = async () => [],
-  onSaveFreeformContext = async () => {},
+  onSaveFreeformContext = async () => { },
   currentDbId = "",
   onFetchDbList = async () => [],
-  onChangeDb = async () => {},
+  onChangeDb = async () => { },
 }) {
   const [message, setMessage] = useState("");
   const [isContextModalOpen, setIsContextModalOpen] = useState(false);
@@ -401,8 +401,8 @@ export default function ChatInput({
       const list = await onFetchDbList();
       const normalized = Array.isArray(list)
         ? list
-            .map((item) => (typeof item === "string" ? item.trim() : ""))
-            .filter(Boolean)
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean)
         : [];
       setDbList(normalized);
       const trimmedCurrent = (currentDbId || "").trim();
@@ -829,14 +829,7 @@ export default function ChatInput({
             >
               SQL 실행하기
             </button>
-            <button
-              type="button"
-              className="sql-test-button"
-              disabled={disabled || loading || sqlRunLoading || sqlTestLoading}
-              onClick={onTestSql}
-            >
-              SQL 테스트하기
-            </button>
+
           </>
         )}
       </div>
@@ -907,61 +900,61 @@ export default function ChatInput({
               </button>
             </div>
             <div className="db-modal-body">
-          {dbLoading ? (
-            <p className="db-modal-subtitle">DB 목록을 불러오는 중...</p>
-          ) : dbList.length ? (
-            <div className="db-dropdown" ref={dbDropdownRef}>
-              <button
-                type="button"
-                className="db-dropdown-trigger"
-                onClick={toggleDbDropdown}
-                onKeyDown={handleDbTriggerKeyDown}
-                ref={dbTriggerRef}
-                aria-haspopup="listbox"
-                aria-expanded={isDbDropdownOpen}
-                disabled={dbSubmitting}
-              >
-                <span>{dbSelection || "DB를 선택하세요"}</span>
-                <span aria-hidden="true" className="db-dropdown-icon">
-                  ▾
-                </span>
-              </button>
-              {isDbDropdownOpen && (
-                <div
-                  className="db-dropdown-menu"
-                  role="listbox"
-                  tabIndex={-1}
-                  ref={dbListRef}
-                  onKeyDown={handleDbDropdownKeyDown}
-                  aria-activedescendant={
-                    dbActiveIndex >= 0 ? `db-option-${dbActiveIndex}` : undefined
-                  }
-                >
-                  {dbList.map((dbId, index) => {
-                    const isSelected = dbSelection === dbId;
-                    const isActive = dbActiveIndex === index;
-                    return (
-                      <button
-                        key={dbId}
-                        type="button"
-                        id={`db-option-${index}`}
-                        role="option"
-                        aria-selected={isSelected}
-                        className={`db-dropdown-option${isActive ? " active" : ""}${isSelected ? " selected" : ""}`}
-                        onClick={() => handleDbOptionSelect(dbId)}
-                        onMouseEnter={() => setDbActiveIndex(index)}
-                        disabled={dbSubmitting}
-                      >
-                        {dbId}
-                      </button>
-                    );
-                  })}
+              {dbLoading ? (
+                <p className="db-modal-subtitle">DB 목록을 불러오는 중...</p>
+              ) : dbList.length ? (
+                <div className="db-dropdown" ref={dbDropdownRef}>
+                  <button
+                    type="button"
+                    className="db-dropdown-trigger"
+                    onClick={toggleDbDropdown}
+                    onKeyDown={handleDbTriggerKeyDown}
+                    ref={dbTriggerRef}
+                    aria-haspopup="listbox"
+                    aria-expanded={isDbDropdownOpen}
+                    disabled={dbSubmitting}
+                  >
+                    <span>{dbSelection || "DB를 선택하세요"}</span>
+                    <span aria-hidden="true" className="db-dropdown-icon">
+                      ▾
+                    </span>
+                  </button>
+                  {isDbDropdownOpen && (
+                    <div
+                      className="db-dropdown-menu"
+                      role="listbox"
+                      tabIndex={-1}
+                      ref={dbListRef}
+                      onKeyDown={handleDbDropdownKeyDown}
+                      aria-activedescendant={
+                        dbActiveIndex >= 0 ? `db-option-${dbActiveIndex}` : undefined
+                      }
+                    >
+                      {dbList.map((dbId, index) => {
+                        const isSelected = dbSelection === dbId;
+                        const isActive = dbActiveIndex === index;
+                        return (
+                          <button
+                            key={dbId}
+                            type="button"
+                            id={`db-option-${index}`}
+                            role="option"
+                            aria-selected={isSelected}
+                            className={`db-dropdown-option${isActive ? " active" : ""}${isSelected ? " selected" : ""}`}
+                            onClick={() => handleDbOptionSelect(dbId)}
+                            onMouseEnter={() => setDbActiveIndex(index)}
+                            disabled={dbSubmitting}
+                          >
+                            {dbId}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
+              ) : (
+                <p className="db-modal-subtitle">선택할 수 있는 DB가 없습니다.</p>
               )}
-            </div>
-          ) : (
-            <p className="db-modal-subtitle">선택할 수 있는 DB가 없습니다.</p>
-          )}
               {dbError && (
                 <p className="db-modal-error" role="status">
                   {dbError}
@@ -1135,46 +1128,46 @@ export default function ChatInput({
                       data-min-rows="2"
                     />
                   </div>
-                <div className="db-preview-table">
-                  <table className="result-table">
-                    <thead>
-                      <tr>
-                        {dbConvertPreview.headers.map((header, index) => (
-                          <th key={`${header}-${index}`}>{header || `열 ${index + 1}`}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr className="db-column-inputs">
-                        {dbConvertPreview.headers.map((header, index) => (
-                          <td key={`desc-${index}`}>
-                            <textarea
-                              className="db-column-input"
-                              value={dbColumnDescriptions[index] || ""}
-                              onChange={(event) =>
-                                handleDbColumnDescriptionChange(index, event.target.value)
-                              }
-                              onInput={(event) => autoExpandTextarea(event.target)}
-                              placeholder="컬럼 설명"
-                              disabled={dbConvertSubmitting}
-                              rows={1}
-                              data-min-rows="1"
-                            />
-                          </td>
-                        ))}
-                      </tr>
-                      {dbConvertPreview.rows.map((row, rowIndex) => (
-                        <tr key={`row-${rowIndex}`}>
-                          {dbConvertPreview.headers.map((_, colIndex) => (
-                            <td key={`cell-${rowIndex}-${colIndex}`}>
-                              {row[colIndex] ?? ""}
+                  <div className="db-preview-table">
+                    <table className="result-table">
+                      <thead>
+                        <tr>
+                          {dbConvertPreview.headers.map((header, index) => (
+                            <th key={`${header}-${index}`}>{header || `열 ${index + 1}`}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="db-column-inputs">
+                          {dbConvertPreview.headers.map((header, index) => (
+                            <td key={`desc-${index}`}>
+                              <textarea
+                                className="db-column-input"
+                                value={dbColumnDescriptions[index] || ""}
+                                onChange={(event) =>
+                                  handleDbColumnDescriptionChange(index, event.target.value)
+                                }
+                                onInput={(event) => autoExpandTextarea(event.target)}
+                                placeholder="컬럼 설명"
+                                disabled={dbConvertSubmitting}
+                                rows={1}
+                                data-min-rows="1"
+                              />
                             </td>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                        {dbConvertPreview.rows.map((row, rowIndex) => (
+                          <tr key={`row-${rowIndex}`}>
+                            {dbConvertPreview.headers.map((_, colIndex) => (
+                              <td key={`cell-${rowIndex}-${colIndex}`}>
+                                {row[colIndex] ?? ""}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </>
               ) : (
                 <p className="db-modal-subtitle">

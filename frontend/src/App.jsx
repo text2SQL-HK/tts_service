@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import UserSetup from "./components/UserSetup.jsx";
 import MessageList from "./components/MessageList.jsx";
 import ChatInput from "./components/ChatInput.jsx";
@@ -490,7 +490,7 @@ export default function App() {
       if (Array.isArray(data.history) && data.history.length) {
         const mapped = mapHistoryItems(data.history);
         setChatHistory(mapped);
-        setSqlAugmentations((prev) => pruneSqlAugmentations(mapped, prev));
+
         const sqlSnippet = getLastAssistantSql(mapped);
         setLastAssistantSql(sqlSnippet);
         setShowSqlButton(Boolean(sqlSnippet));
@@ -583,7 +583,7 @@ export default function App() {
       if (Array.isArray(data.history) && data.history.length) {
         const mapped = mapHistoryItems(data.history);
         setChatHistory(mapped);
-        setSqlAugmentations((prev) => pruneSqlAugmentations(mapped, prev));
+
         const sqlSnippet = getLastAssistantSql(mapped);
         setLastAssistantSql(sqlSnippet);
         setShowSqlButton(Boolean(sqlSnippet));
@@ -862,6 +862,72 @@ export default function App() {
   const [activeImageIndex, setActiveImageIndex] = useState(-1);
   const [activeTableIndex, setActiveTableIndex] = useState(-1);
 
+  // Resize Logic
+  const [leftRatio, setLeftRatio] = useState(40);
+  const [plotRatio, setPlotRatio] = useState(50);
+  const contentSplitRef = useRef(null);
+  const leftPanelRef = useRef(null);
+  const isResizingRef = useRef(false);
+  const isVResizingRef = useRef(false);
+
+  const handleResizeStart = (e) => {
+    isResizingRef.current = true;
+    document.addEventListener("mousemove", handleResizeMove);
+    document.addEventListener("mouseup", handleResizeEnd);
+    // Prevent text selection while dragging
+    document.body.style.userSelect = "none";
+  };
+
+  const handleResizeMove = (e) => {
+    if (!isResizingRef.current || !contentSplitRef.current) return;
+
+    const containerRect = contentSplitRef.current.getBoundingClientRect();
+    const newLeftWidth = e.clientX - containerRect.left;
+    let newRatio = (newLeftWidth / containerRect.width) * 100;
+
+    // Clamp ratio (min 20%, max 80%)
+    if (newRatio < 20) newRatio = 20;
+    if (newRatio > 80) newRatio = 80;
+
+    setLeftRatio(newRatio);
+  };
+
+  const handleResizeEnd = () => {
+    isResizingRef.current = false;
+    document.removeEventListener("mousemove", handleResizeMove);
+    document.removeEventListener("mouseup", handleResizeEnd);
+    document.body.style.userSelect = "";
+  };
+
+  const handleVResizeStart = (e) => {
+    e.stopPropagation(); // Prevent affecting parent resize
+    isVResizingRef.current = true;
+    document.addEventListener("mousemove", handleVResizeMove);
+    document.addEventListener("mouseup", handleVResizeEnd);
+    document.body.style.userSelect = "none";
+  };
+
+  const handleVResizeMove = (e) => {
+    if (!isVResizingRef.current || !leftPanelRef.current) return;
+
+    const containerRect = leftPanelRef.current.getBoundingClientRect();
+    const newTopHeight = e.clientY - containerRect.top;
+    let newRatio = (newTopHeight / containerRect.height) * 100;
+
+    // Clamp ratio (min 20%, max 80%)
+    if (newRatio < 20) newRatio = 20;
+    if (newRatio > 80) newRatio = 80;
+
+    setPlotRatio(newRatio);
+  };
+
+  const handleVResizeEnd = () => {
+    isVResizingRef.current = false;
+    document.removeEventListener("mousemove", handleVResizeMove);
+    document.removeEventListener("mouseup", handleVResizeEnd);
+    document.body.style.userSelect = "";
+  };
+
   useEffect(() => {
     if (allImages.length > 0) {
       // If index is invalid or -1, snap to last
@@ -898,10 +964,7 @@ export default function App() {
       {/* Global Header */}
       <header className="global-header">
         <div className="header-content">
-          <div className="branding">
-            <h1>🖥️ CHAT</h1>
-            <p>데이터 분석 봇</p>
-          </div>
+
           <UserSetup
             pendingUserId={pendingUserId}
             onUserIdChange={handlePendingUserIdChange}
@@ -915,11 +978,14 @@ export default function App() {
       </header>
 
       {/* Main Content Area */}
-      <div className="content-split">
+      {/* Main Content Area */}
+      <div className="content-split" ref={contentSplitRef}>
+
         {/* Left Panel: Dashboard (Plot & Table) */}
-        <div className="left-panel">
+        {/* Left Panel: Dashboard (Plot & Table) */}
+        <div className="left-panel" ref={leftPanelRef} style={{ flex: leftRatio }}>
           {/* Top: Plot Section */}
-          <div className="dashboard-plot-section">
+          <div className="dashboard-plot-section" style={{ flex: plotRatio }}>
             <div className="dashboard-section-title">
               <span>PLOT {allImages.length > 0 && `(${activeImageIndex + 1}/${allImages.length})`}</span>
               <div className="dashboard-nav-controls">
@@ -944,8 +1010,10 @@ export default function App() {
             </div>
           </div>
 
+          <div className="resize-handle-vertical" onMouseDown={handleVResizeStart} />
+
           {/* Bottom: Table Section */}
-          <div className="dashboard-table-section">
+          <div className="dashboard-table-section" style={{ flex: 100 - plotRatio }}>
             <div className="dashboard-section-title">
               <span>TABLE {allTables.length > 0 && `(${activeTableIndex + 1}/${allTables.length})`}</span>
               {currentTable && currentTable.tableNumber && (
@@ -981,8 +1049,11 @@ export default function App() {
           </div>
         </div>
 
+        {/* Resize Handle */}
+        <div className="resize-handle" onMouseDown={handleResizeStart} />
+
         {/* Right Panel: Chat Interface */}
-        <div className="right-panel">
+        <div className="right-panel" style={{ flex: 100 - leftRatio }}>
           <div className="chat-container">
             <main className="chat-window" id="chat-window">
               <MessageList
