@@ -241,7 +241,7 @@ if STATIC_DIR.exists():
 
 
 @app.post("/chat", response_model=PipelineOutput)
-async def chat(payload: PipelineInput):
+def chat(payload: PipelineInput):
     user_id = payload.user_id.strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -267,7 +267,7 @@ async def chat(payload: PipelineInput):
 
 
 @app.get("/chat/history/{user_id}")
-async def chat_history(user_id: str):
+def chat_history(user_id: str):
     user_id = user_id.strip()
     if not user_id:
         return {"history": []}
@@ -277,7 +277,7 @@ async def chat_history(user_id: str):
     return {"history": _visible_history(session.get("chat_history", []))}
 
 @app.post("/chat/sql/execute", response_model=SqlExecuteOutput)
-async def chat_sql_execute(payload: SqlExecuteInput):
+def chat_sql_execute(payload: SqlExecuteInput):
     user_id = payload.user_id.strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -378,7 +378,7 @@ async def chat_sql_execute(payload: SqlExecuteInput):
 
 
 @app.post("/chat/sql/test", response_model=SqlExecuteOutput)
-async def chat_sql_test(payload: SqlExecuteInput):
+def chat_sql_test(payload: SqlExecuteInput):
     user_id = payload.user_id.strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -470,7 +470,7 @@ async def chat_sql_test(payload: SqlExecuteInput):
 
 
 @app.post("/chat/sql/table-more", response_model=SqlTableMoreOutput)
-async def chat_sql_table_more(payload: SqlTableMoreInput) -> SqlTableMoreOutput:
+def chat_sql_table_more(payload: SqlTableMoreInput) -> SqlTableMoreOutput:
     user_id = payload.user_id.strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -527,7 +527,7 @@ async def chat_sql_table_more(payload: SqlTableMoreInput) -> SqlTableMoreOutput:
     )
 
 @app.post("/chat/context/questions", response_model=ContextQuestionOutput)
-async def generate_context_questions(payload: ContextQuestionInput):
+def generate_context_questions(payload: ContextQuestionInput):
     if not callable(run_promode):
         raise HTTPException(status_code=503, detail="질문 생성 기능이 비활성화되었습니다.")
 
@@ -558,7 +558,7 @@ async def generate_context_questions(payload: ContextQuestionInput):
 
 
 @app.post("/chat/context", response_model=ContextOutput)
-async def save_context(payload: ContextSaveInput):
+def save_context(payload: ContextSaveInput):
     if not callable(evidence_maker):
         raise HTTPException(status_code=503, detail="evidence_maker가 구성되지 않았습니다.")
 
@@ -617,7 +617,7 @@ async def save_context(payload: ContextSaveInput):
 
 
 @app.post("/chat/context/direct", response_model=ContextOutput)
-async def save_context_direct(payload: ContextDirectInput):
+def save_context_direct(payload: ContextDirectInput):
     user_id = payload.user_id.strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -650,7 +650,7 @@ async def save_context_direct(payload: ContextDirectInput):
 
 
 @app.get("/chat/context/{user_id}")
-async def read_context_notes(user_id: str):
+def read_context_notes(user_id: str):
     trimmed = user_id.strip()
     if not trimmed:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -660,7 +660,7 @@ async def read_context_notes(user_id: str):
 
 
 @app.get("/chat/db/list")
-async def read_db_list(user_id: Optional[str] = None):
+def read_db_list(user_id: Optional[str] = None):
     trimmed = (user_id or "").strip()
     if not trimmed:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -669,7 +669,7 @@ async def read_db_list(user_id: Optional[str] = None):
 
 
 @app.get("/chat/db/{user_id}")
-async def read_current_db(user_id: str):
+def read_current_db(user_id: str):
     trimmed = user_id.strip()
     if not trimmed:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -678,7 +678,7 @@ async def read_current_db(user_id: str):
 
 
 @app.post("/chat/db/select")
-async def select_db(payload: DbSelectInput):
+def select_db(payload: DbSelectInput):
     user_id = payload.user_id.strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
@@ -695,7 +695,7 @@ async def select_db(payload: DbSelectInput):
 
 
 @app.post("/chat/db/upload")
-async def upload_db_csv(
+def upload_db_csv(
     user_id: str = Form(...),
     file: UploadFile = File(...),
     db_id: Optional[str] = Form(None),
@@ -728,7 +728,7 @@ async def upload_db_csv(
 
     with destination.open("wb") as target:
         shutil.copyfileobj(file.file, target)
-    await file.close()
+    file.file.close()
 
     relative_path = destination
     try:
@@ -745,7 +745,7 @@ async def upload_db_csv(
 
 
 @app.post("/chat/db/convert")
-async def convert_db_csv(payload: DbConvertInput):
+def convert_db_csv(payload: DbConvertInput):
     user_id = payload.user_id.strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")

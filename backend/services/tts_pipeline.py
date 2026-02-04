@@ -232,7 +232,7 @@ def direct_retrieval_node(state: DirectState) -> DirectState:
     context = retriever_chain.invoke(query)
     elapsed = time.time() - start
     print(f"Context retrieval took {elapsed:.4f} seconds; length={len(context)}")
-    print(context)
+    #print(context)
     state["context"] = context
     return state
 
@@ -327,7 +327,7 @@ def run_promode(
     import ipdb; ipdb.set_trace()
     retriever = _get_graph_retriever(db_id)
     desc_str = retriever.get_relevant_schema(question)
-    print(desc_str)
+    #print(desc_str)
     fk_str = ""
     state: AnalysisState = {
         "user_prompt": question,
@@ -350,7 +350,7 @@ def run_direct(
     result = RETRIEVAL_GRAPH.invoke(state)
     retriever = _get_graph_retriever(db_id)
     desc_str = retriever.get_relevant_schema(question, result["context"])
-    print(desc_str)
+    #print(desc_str)
     fk_str = ""
     state: DirectState = {
         "user_prompt": question,

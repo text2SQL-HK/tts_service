@@ -117,6 +117,7 @@ def execute_python(code: str, user_id: str) -> str:
     return normalize_output(output)
 
 def text_to_sql(query: str, user_id: str) -> str:
+    print(query)
     session = _ensure_session(user_id)
     db_id = session.get("db_id", "EXAMPLE_DATABASE")
     evidence = session.get("evidence", "")

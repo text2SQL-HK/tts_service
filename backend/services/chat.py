@@ -230,11 +230,11 @@ def run_sql(
     verify_command = f"cat {dest_path_in_container}"
     exit_code, output = container.exec_run(verify_command)
     if exit_code == 0:
-        print(output.decode().strip())
+        #print(output.decode().strip())
         print(f"CSV saved to {dest_path_in_container}")
     else:
         print("Error verifying file:")
-        print(output.decode().strip())
+        #print(output.decode().strip())
 
     table_info = table_info_maker(rows, cols)
     serializable_rows = [["" if cell is None else str(cell) for cell in row] for row in rows]
@@ -354,9 +354,9 @@ def run_chat_turn(
             "content": str(content) if content is not None else "",
         }
         sanitized_history.append(sanitized_entry)
-    for chat in sanitized_history:
-        if chat["role"] != "system":
-            print(chat)
+    # for chat in sanitized_history:
+    #     if chat["role"] != "system":
+    #         print(chat)
     start = time.time()
     response = OPENAI_CLIENT.responses.create(
         model=RESPONSES_MODEL,
@@ -365,7 +365,7 @@ def run_chat_turn(
         reasoning={"effort": "medium"}
     )
     sanitized_history += response.output
-    print(sanitized_history)
+    #print(sanitized_history)
     max_tool_rounds = 4
     tool_rounds = 0
     while True:
@@ -426,19 +426,25 @@ def run_chat_turn(
     if assistant_reply.startswith("**PLOT**"):
         docker_client = docker.from_env()
         container = _ensure_plot_container(docker_client, user_id)
-        try: stream, stat = container.get_archive(f"{PLOT_TMP_DIR}/output.png")
-        except: exit()
-        file_like = io.BytesIO(b"".join(stream))
-        with tarfile.open(fileobj=file_like) as tar:
-            member = tar.getmembers()[0]
-            file_data = tar.extractfile(member).read()
-        b64_encoded = base64.b64encode(file_data).decode("utf-8")
-        b64_encoded = f"data:image/png;base64,{b64_encoded}"
-        return {
-            "response": assistant_reply,
-            "chat_history": chat_history,
-            "image": b64_encoded
-        }
+        try: 
+            stream, stat = container.get_archive(f"{PLOT_TMP_DIR}/output.png")
+            file_like = io.BytesIO(b"".join(stream))
+            with tarfile.open(fileobj=file_like) as tar:
+                member = tar.getmembers()[0]
+                file_data = tar.extractfile(member).read()
+            b64_encoded = base64.b64encode(file_data).decode("utf-8")
+            b64_encoded = f"data:image/png;base64,{b64_encoded}"
+            return {
+                "response": assistant_reply,
+                "chat_history": chat_history,
+                "image": b64_encoded
+            }
+        except Exception as e:
+            error_msg = f"\n[System Error] 이미지 생성에 실패했습니다: {str(e)}"
+            return {
+                "response": assistant_reply + error_msg,
+                "chat_history": chat_history,
+            }
 
     return {
         "response": assistant_reply,
