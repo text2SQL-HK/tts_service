@@ -1,5 +1,8 @@
 from pathlib import Path
 import json
+import os
+
+from dotenv import load_dotenv
 
 #유틸
 def load_prompt(path: Path) -> str:
@@ -10,6 +13,8 @@ def load_prompt(path: Path) -> str:
 #설정 값들
 APP_DIR = Path(__file__).resolve().parent
 BASE_DIR = APP_DIR.parent
+load_dotenv(BASE_DIR / ".env")
+
 PIPELINE_PATH = APP_DIR / "services" / "tts_pipeline.py"
 CHAT_PATH = APP_DIR / "services" / "chat.py"
 DB_LIST_PATH = APP_DIR / "metadata" / "db_list.json"
@@ -25,4 +30,22 @@ CHATBOT_SYS_PROMPT = load_prompt(PROMPT_DIR / "SYS_PROMPT-mod.txt")
 STATIC_DIR = APP_DIR / "static"
 SQL_ROWS_PAGE_SIZE = 200
 RERANK_URL = "http://127.0.0.1:8002/rerank"
+SESSION_TIMEOUT_SECONDS = 3600 # 1시간
 ORACLE_JSON_PATH = Path(APP_DIR / "metadata" / "ORACLE_INFO.json")
+
+POSTGRE_HOST = os.getenv("POSTGRE_HOST", "127.0.0.1")
+POSTGRE_NAME = os.getenv("POSTGRE_DB") or os.getenv("POSTGRE_NAME", "")
+POSTGRE_USER = os.getenv("POSTGRE_USER", "")
+POSTGRE_PWD = os.getenv("POSTGRE_PWD", "")
+POSTGRE_PORT = int(os.getenv("POSTGRE_PORT", "5432"))
+POSTGRE_POOL_MIN_CONN = int(os.getenv("POSTGRE_POOL_MIN_CONN", "1"))
+POSTGRE_POOL_MAX_CONN = int(os.getenv("POSTGRE_POOL_MAX_CONN", "10"))
+
+REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", str(SESSION_TIMEOUT_SECONDS)))
+CACHE_HISTORY_LIMIT = int(os.getenv("CACHE_HISTORY_LIMIT", "100"))
+CACHE_EVENTS_LIMIT = int(os.getenv("CACHE_EVENTS_LIMIT", "100"))

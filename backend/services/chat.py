@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import os
+import shlex
 import sqlite3
 import re
 import tarfile
@@ -152,9 +153,23 @@ def _extract_response_payload(response) -> Tuple[str, List[Dict[str, Any]]]:
     return "\n".join(texts), mcp_calls
 
 def _ensure_plot_container(client: docker.DockerClient, user_id: str):
+    user_root_dir = APP_DIR / "session_data" / user_id
+    user_root_dir.mkdir(parents=True, exist_ok=True)
     try:
         container = client.containers.get(f"c{user_id}")
         container.reload()
+        mounts = container.attrs.get("Mounts", []) or []
+        expected_source = str(user_root_dir.resolve())
+        has_expected_mount = any(
+            mount.get("Destination") == "/home"
+            and str(Path(mount.get("Source", "")).resolve()) == expected_source
+            for mount in mounts
+        )
+        if not has_expected_mount:
+            if container.status == "running":
+                container.stop()
+            container.remove()
+            raise docker.errors.NotFound("container mount mismatch")
         if container.status != "running":
             container.start()
     except docker.errors.NotFound:
@@ -163,23 +178,46 @@ def _ensure_plot_container(client: docker.DockerClient, user_id: str):
             command="sleep infinity",
             detach=True,
             name=f"c{user_id}",
+            volumes={
+                str(user_root_dir): {
+                    "bind": "/home",
+                    "mode": "rw",
+                }
+            },
         )
     return container
 
-def _allocate_csv_path(container) -> Tuple[str, str]:
-    list_command = f"ls {PLOT_TMP_DIR}/output*.csv 2>/dev/null || true"
+def _normalize_session_fragment(user_id: str, session_id: Optional[Any] = None) -> str:
+    raw = str(session_id).strip() if session_id is not None else ""
+    if not raw:
+        raw = str(user_id).strip()
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._-")
+    return sanitized or "default"
+
+
+def _allocate_csv_path(
+    container,
+    user_id: str,
+    session_id: Optional[Any] = None,
+) -> Tuple[str, str]:
+    session_fragment = _normalize_session_fragment(user_id, session_id)
+    target_dir = f"{PLOT_TMP_DIR}/{session_fragment}"
+    mkdir_command = f"mkdir -p {shlex.quote(target_dir)}"
+    container.exec_run(["/bin/sh", "-c", mkdir_command])
+    list_command = f"ls {shlex.quote(target_dir)}/output*.csv 2>/dev/null || true"
     _, output = container.exec_run(["/bin/sh", "-c", list_command])
     decoded = output.decode("utf-8") if isinstance(output, (bytes, bytearray)) else str(output)
     indices = [int(match) for match in re.findall(r"output(\d+)\.csv", decoded)]
     next_index = max(indices) + 1 if indices else 1
     filename = f"output{next_index}.csv"
-    return filename, f"{PLOT_TMP_DIR}/{filename}"
+    return filename, f"{target_dir}/{filename}"
 
 def run_sql(
     sql: str,
     db_id: str,
     user_id: str,
-    save_csv: bool = True
+    save_csv: bool = True,
+    session_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     sql 가져와서 실행하고 컨테이너 생성 후 그 안에 저장하는 함수.
@@ -217,7 +255,11 @@ def run_sql(
     #container 생성 및 파일 경로 결정
     client = docker.from_env()
     container = _ensure_plot_container(client, user_id)
-    dest_filename, dest_path_in_container = _allocate_csv_path(container)
+    dest_filename, dest_path_in_container = _allocate_csv_path(
+        container,
+        user_id=user_id,
+        session_id=session_id,
+    )
     pw_tarstream = io.BytesIO()
     encoded_csv = csv_text.encode("utf-8")
     with tarfile.open(fileobj=pw_tarstream, mode="w") as tar:
@@ -251,7 +293,8 @@ def run_sql_for_new(
     sql: str,
     db_id: str,
     user_id: str,
-    save_csv: bool = True
+    save_csv: bool = True,
+    session_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     SQLite 파일(uploads/{user_id}/{db_id}/{db_id}.sqlite)에서 SQL을 실행하고 결과를 반환.
@@ -287,7 +330,11 @@ def run_sql_for_new(
     #container 생성 및 파일 경로 결정
     client = docker.from_env()
     container = _ensure_plot_container(client, user_id)
-    dest_filename, dest_path_in_container = _allocate_csv_path(container)
+    dest_filename, dest_path_in_container = _allocate_csv_path(
+        container,
+        user_id=user_id,
+        session_id=session_id,
+    )
     pw_tarstream = io.BytesIO()
     encoded_csv = csv_text.encode("utf-8")
     with tarfile.open(fileobj=pw_tarstream, mode="w") as tar:
@@ -320,13 +367,14 @@ def run_sql_for_new(
 def test_sql(
     sql: str,
     db_id: str,
-    user_id: str
+    user_id: str,
+    session_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     SQL 실행 테스트 함수. 오직 10개의 행만 반환.
     """
     new_sql = f"{sql} FETCH FIRST 10 ROWS ONLY"
-    return run_sql(new_sql, db_id, user_id, save_csv=False)
+    return run_sql(new_sql, db_id, user_id, save_csv=False, session_id=session_id)
 
 def format_docs(docs: List[Document]) -> str:
     """
@@ -338,7 +386,8 @@ def format_docs(docs: List[Document]) -> str:
 def run_chat_turn(
     user_prompt: str,
     chat_history: List[Dict[str, str]],
-    user_id: str
+    user_id: str,
+    session_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
     chat_history.append({"role": "user", "content": user_prompt})
     sanitized_history: List[Dict[str, str]] = []
@@ -368,39 +417,59 @@ def run_chat_turn(
     #print(sanitized_history)
     max_tool_rounds = 4
     tool_rounds = 0
+    tool_call_logs: List[Dict[str, Any]] = []
     while True:
         tool_called = False
         for item in response.output:
             if item.type == "function_call":
                 tool_called = True
-                args = json.loads(item.arguments)
-                if item.name == "plot":
-                    plot_result = plot(**args)
-                    sanitized_history.append({
-                        "type": "function_call_output",
-                        "call_id": item.call_id,
-                        "output": json.dumps({
-                            "plot": plot_result
-                        })  
-                    })
-                elif item.name == "execute_python":
-                    execute_result = execute_python(**args)
-                    sanitized_history.append({
-                        "type": "function_call_output",
-                        "call_id": item.call_id,
-                        "output": json.dumps({
-                            "execute_python": execute_result
-                        })
-                    })
-                elif item.name == "text_to_sql":
-                    text_to_sql_result = text_to_sql(**args)
-                    sanitized_history.append({
-                        "type": "function_call_output",
-                        "call_id": item.call_id,
-                        "output": json.dumps({
-                            "text_to_sql": text_to_sql_result
-                        })
-                    })
+                raw_arguments = getattr(item, "arguments", "{}")
+                try:
+                    args = json.loads(raw_arguments)
+                except Exception:
+                    args = {}
+                if not isinstance(args, dict):
+                    args = {"value": args}
+                if "user_id" not in args:
+                    args["user_id"] = user_id
+                if session_id is not None:
+                    args["session_id"] = str(session_id)
+
+                tool_name = str(getattr(item, "name", ""))
+                output_payload: Dict[str, Any] = {}
+                status = "success"
+                try:
+                    if tool_name == "plot":
+                        plot_result = plot(**args)
+                        output_payload = {"plot": plot_result}
+                        if isinstance(plot_result, str) and plot_result.startswith("failed"):
+                            status = "error"
+                    elif tool_name == "execute_python":
+                        execute_result = execute_python(**args)
+                        output_payload = {"execute_python": execute_result}
+                    elif tool_name == "text_to_sql":
+                        text_to_sql_result = text_to_sql(**args)
+                        output_payload = {"text_to_sql": text_to_sql_result}
+                    else:
+                        output_payload = {"error": f"unknown tool: {tool_name}"}
+                        status = "error"
+                except Exception as tool_exc:
+                    output_payload = {"error": str(tool_exc)}
+                    status = "error"
+
+                sanitized_history.append({
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": json.dumps(output_payload, ensure_ascii=False),
+                })
+                tool_call_logs.append(
+                    {
+                        "tool_name": tool_name,
+                        "arguments": args,
+                        "result": output_payload,
+                        "status": status,
+                    }
+                )
         if not tool_called:
             break
         tool_rounds += 1
@@ -426,27 +495,40 @@ def run_chat_turn(
     if assistant_reply.startswith("**PLOT**"):
         docker_client = docker.from_env()
         container = _ensure_plot_container(docker_client, user_id)
-        try: 
-            stream, stat = container.get_archive(f"{PLOT_TMP_DIR}/output.png")
-            file_like = io.BytesIO(b"".join(stream))
-            with tarfile.open(fileobj=file_like) as tar:
-                member = tar.getmembers()[0]
-                file_data = tar.extractfile(member).read()
-            b64_encoded = base64.b64encode(file_data).decode("utf-8")
-            b64_encoded = f"data:image/png;base64,{b64_encoded}"
-            return {
-                "response": assistant_reply,
-                "chat_history": chat_history,
-                "image": b64_encoded
-            }
-        except Exception as e:
-            error_msg = f"\n[System Error] 이미지 생성에 실패했습니다: {str(e)}"
-            return {
-                "response": assistant_reply + error_msg,
-                "chat_history": chat_history,
-            }
+        session_fragment = _normalize_session_fragment(user_id, session_id)
+        plot_paths = [
+            f"{PLOT_TMP_DIR}/{session_fragment}/output.png",
+            f"{PLOT_TMP_DIR}/output.png",
+        ]
+        last_exc: Optional[Exception] = None
+        for plot_path in plot_paths:
+            try:
+                stream, _ = container.get_archive(plot_path)
+                file_like = io.BytesIO(b"".join(stream))
+                with tarfile.open(fileobj=file_like) as tar:
+                    member = tar.getmembers()[0]
+                    file_data = tar.extractfile(member).read()
+                b64_encoded = base64.b64encode(file_data).decode("utf-8")
+                b64_encoded = f"data:image/png;base64,{b64_encoded}"
+                return {
+                    "response": assistant_reply,
+                    "chat_history": chat_history,
+                    "image": b64_encoded,
+                    "tool_calls": tool_call_logs,
+                }
+            except Exception as exc:
+                last_exc = exc
+                continue
+
+        error_msg = f"\n[System Error] 이미지 생성에 실패했습니다: {str(last_exc)}"
+        return {
+            "response": assistant_reply + error_msg,
+            "chat_history": chat_history,
+            "tool_calls": tool_call_logs,
+        }
 
     return {
         "response": assistant_reply,
         "chat_history": chat_history,
+        "tool_calls": tool_call_logs,
     }

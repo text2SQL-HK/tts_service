@@ -5,10 +5,11 @@ requests
 python-multipart
 pydantic
 openai
-langchain
-langchain-core
-langchain-community
-langchain-openai
+rank-bm25==0.2.2
+langchain==0.3.27
+langchain-core==0.3.76
+langchain-community==0.3.29
+langchain-openai==0.3.33
 langgraph
 qdrant-client
 docker
@@ -18,3 +19,6 @@ neo4j
 numpy
 faiss-cpu
 python-dotenv
+
+psycopg2-binary
+redis
