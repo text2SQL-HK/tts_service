@@ -8,6 +8,8 @@ const SQL_LOADING_MESSAGE = "SQL을 생성 중입니다...";
 const USER_ID_MAX_LENGTH = 255;
 const USER_ID_ALLOWED_PATTERN = /^[a-z0-9_.-]+$/;
 const USER_ID_START_PATTERN = /^[a-z0-9]/;
+const TTS_API_BASE = "/api/tts";
+const ttsApi = (path) => `${TTS_API_BASE}${path}`;
 const isInlineImage = (value) =>
   typeof value === "string" && value.startsWith("data:image/");
 
@@ -232,7 +234,7 @@ export default function App() {
     setTableMoreLoading({});
 
     try {
-      const data = await resolveJson(`/chat/history/${encodeURIComponent(userId)}`);
+      const data = await resolveJson(ttsApi(`/history/${encodeURIComponent(userId)}`));
       const history = Array.isArray(data.history) ? mapHistoryItems(data.history) : [];
       setChatHistory(history);
       const sqlSnippet = getLastAssistantSql(history);
@@ -258,7 +260,7 @@ export default function App() {
 
   const loadUserDb = async (userId) => {
     try {
-      const data = await resolveJson(`/chat/db/${encodeURIComponent(userId)}`);
+      const data = await resolveJson(ttsApi(`/db/${encodeURIComponent(userId)}`));
       const dbId = typeof data.db_id === "string" ? data.db_id.trim() : "";
       setCurrentDbId(dbId);
       return dbId;
@@ -276,7 +278,7 @@ export default function App() {
       throw new Error("사용자 ID를 먼저 설정해 주세요.");
     }
     const data = await resolveJson(
-      `/chat/db/list?user_id=${encodeURIComponent(userId)}`,
+      ttsApi(`/db/list?user_id=${encodeURIComponent(userId)}`),
     );
     const normalized = Array.isArray(data.databases)
       ? data.databases
@@ -295,7 +297,7 @@ export default function App() {
     if (!trimmed) {
       throw new Error("변경할 DB를 선택해 주세요.");
     }
-    await resolveJson("/chat/db/select", {
+    await resolveJson(ttsApi("/db/select"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -322,7 +324,7 @@ export default function App() {
     if (dbId && typeof dbId === "string" && dbId.trim()) {
       formData.append("db_id", dbId.trim());
     }
-    return resolveJson("/chat/db/upload", {
+    return resolveJson(ttsApi("/db/upload"), {
       method: "POST",
       body: formData,
     });
@@ -336,7 +338,7 @@ export default function App() {
     if (!trimmed) {
       throw new Error("DB ID를 입력해 주세요.");
     }
-    return resolveJson("/chat/db/convert", {
+    return resolveJson(ttsApi("/db/convert"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -417,7 +419,7 @@ export default function App() {
     setLoading(true);
 
     try {
-      const data = await resolveJson("/chat", {
+      const data = await resolveJson(ttsApi("/chat"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -476,7 +478,7 @@ export default function App() {
     setSqlRunning(true);
     setTableMoreLoading({});
     try {
-      const data = await resolveJson("/chat/sql/execute", {
+      const data = await resolveJson(ttsApi("/sql/execute"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -569,7 +571,7 @@ export default function App() {
     setSqlTesting(true);
     setTableMoreLoading({});
     try {
-      const data = await resolveJson("/chat/sql/test", {
+      const data = await resolveJson(ttsApi("/sql/test"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -663,7 +665,7 @@ export default function App() {
     }
     setTableMoreLoading((prev) => ({ ...prev, [tableNumber]: true }));
     try {
-      const data = await resolveJson("/chat/sql/table-more", {
+      const data = await resolveJson(ttsApi("/sql/table-more"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -733,7 +735,7 @@ export default function App() {
     if (!trimmed) {
       throw new Error("정보 주제를 입력해 주세요.");
     }
-    const data = await resolveJson("/chat/context/questions", {
+    const data = await resolveJson(ttsApi("/context/questions"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -779,7 +781,7 @@ export default function App() {
     if (sanitizedQuestions.length !== sanitizedAnswers.length) {
       throw new Error("질문 수와 답변 수가 일치하지 않습니다.");
     }
-    await resolveJson("/chat/context", {
+    await resolveJson(ttsApi("/context"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -801,7 +803,7 @@ export default function App() {
     if (!sanitizedContent) {
       throw new Error("바로 추가할 정보를 입력해 주세요.");
     }
-    await resolveJson("/chat/context/direct", {
+    await resolveJson(ttsApi("/context/direct"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -819,7 +821,7 @@ export default function App() {
       throw new Error("사용자 ID를 먼저 설정해 주세요.");
     }
     const data = await resolveJson(
-      `/chat/context/${encodeURIComponent(currentUserId)}`,
+      ttsApi(`/context/${encodeURIComponent(currentUserId)}`),
     );
     const notes = Array.isArray(data.notes)
       ? data.notes.filter((note) => note && typeof note === "object")

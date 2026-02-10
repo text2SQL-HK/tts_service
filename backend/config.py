@@ -49,3 +49,11 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", str(SESSION_TIMEOUT_SECONDS)))
 CACHE_HISTORY_LIMIT = int(os.getenv("CACHE_HISTORY_LIMIT", "100"))
 CACHE_EVENTS_LIMIT = int(os.getenv("CACHE_EVENTS_LIMIT", "100"))
+
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "session_token")
+LOGIN_AUTH_ME_URL = os.getenv("LOGIN_AUTH_ME_URL", "http://127.0.0.1:8001/api/auth/me")
+
+TTS_UI_PREFIX = os.getenv("TTS_UI_PREFIX", "/tts")
+TTS_STATIC_PREFIX = os.getenv("TTS_STATIC_PREFIX", "/tts/static")
+TTS_API_PREFIX = os.getenv("TTS_API_PREFIX", "/api/tts")
+LOGIN_UI_PREFIX = os.getenv("LOGIN_UI_PREFIX", "/login")

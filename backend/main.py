@@ -13,8 +13,8 @@ import shutil
 import sqlite3
 import httpx
 import json
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -35,7 +35,20 @@ if __package__:
         save_context_note,
         set_current_db,
     )
-    from .config import APP_DIR, DB_LIST, CHAT_PATH, STATIC_DIR, SQL_ROWS_PAGE_SIZE, PIPELINE_PATH
+    from .config import (
+        APP_DIR,
+        DB_LIST,
+        CHAT_PATH,
+        STATIC_DIR,
+        SQL_ROWS_PAGE_SIZE,
+        PIPELINE_PATH,
+        AUTH_COOKIE_NAME,
+        LOGIN_AUTH_ME_URL,
+        TTS_UI_PREFIX,
+        TTS_STATIC_PREFIX,
+        TTS_API_PREFIX,
+        LOGIN_UI_PREFIX,
+    )
 else:
     from state import (
         SessionData,
@@ -53,7 +66,20 @@ else:
         save_context_note,
         set_current_db,
     )
-    from config import APP_DIR, DB_LIST, CHAT_PATH, STATIC_DIR, SQL_ROWS_PAGE_SIZE, PIPELINE_PATH
+    from config import (
+        APP_DIR,
+        DB_LIST,
+        CHAT_PATH,
+        STATIC_DIR,
+        SQL_ROWS_PAGE_SIZE,
+        PIPELINE_PATH,
+        AUTH_COOKIE_NAME,
+        LOGIN_AUTH_ME_URL,
+        TTS_UI_PREFIX,
+        TTS_STATIC_PREFIX,
+        TTS_API_PREFIX,
+        LOGIN_UI_PREFIX,
+    )
 
 from .services import tts_pipeline as _pipeline
 from .services import chat as _chat
@@ -453,7 +479,59 @@ def _run_chat_turn(session: SessionData, message: str, user_id: str) -> Dict[str
     }
 
 
+def _normalize_path(path: str) -> str:
+    if not path:
+        return "/"
+    normalized = path.rstrip("/")
+    return normalized or "/"
+
+
+def _is_protected_tts_path(path: str) -> bool:
+    normalized = _normalize_path(path)
+    if normalized == TTS_STATIC_PREFIX or normalized.startswith(f"{TTS_STATIC_PREFIX}/"):
+        return False
+    if normalized == TTS_UI_PREFIX:
+        return True
+    if normalized == TTS_API_PREFIX:
+        return True
+    if normalized.startswith(f"{TTS_API_PREFIX}/"):
+        return True
+    if normalized.startswith(f"{TTS_UI_PREFIX}/"):
+        return True
+    return False
+
+
+def _is_html_request(request: Request) -> bool:
+    accept = request.headers.get("accept", "").lower()
+    return "text/html" in accept
+
+
+async def _has_valid_login_session(token: str) -> bool:
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(
+                LOGIN_AUTH_ME_URL,
+                cookies={AUTH_COOKIE_NAME: token},
+            )
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
 app = FastAPI()
+
+
+@app.middleware("http")
+async def require_login_for_tts(request: Request, call_next):
+    if _is_protected_tts_path(request.url.path):
+        session_token = request.cookies.get(AUTH_COOKIE_NAME, "")
+        if not await _has_valid_login_session(session_token):
+            if _is_html_request(request):
+                return RedirectResponse(url=LOGIN_UI_PREFIX, status_code=307)
+            return JSONResponse(status_code=401, content={"detail": "로그인이 필요합니다."})
+    return await call_next(request)
 
 @app.on_event("startup")
 async def startup_event():
@@ -472,10 +550,10 @@ async def startup_event():
     asyncio.create_task(cleanup_loop())
 
 if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount(TTS_STATIC_PREFIX, StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@app.post("/chat", response_model=PipelineOutput)
+@app.post(f"{TTS_API_PREFIX}/chat", response_model=PipelineOutput)
 def chat(payload: PipelineInput):
     user_id = payload.user_id.strip()
     if not user_id:
@@ -502,7 +580,7 @@ def chat(payload: PipelineInput):
     return payload
 
 
-@app.get("/chat/history/{user_id}")
+@app.get(f"{TTS_API_PREFIX}/history/{{user_id}}")
 def chat_history(user_id: str):
     user_id = user_id.strip()
     if not user_id:
@@ -512,7 +590,7 @@ def chat_history(user_id: str):
     return {"history": _visible_history(session.get("chat_history", []))}
 
 
-@app.get("/sessions/{session_id}/timeline")
+@app.get(f"{TTS_API_PREFIX}/sessions/{{session_id}}/timeline")
 def get_session_timeline(
     session_id: int,
     before_created_at: Optional[str] = None,
@@ -558,7 +636,7 @@ def get_session_timeline(
     return {"items": items, "next_cursor": next_cursor}
 
 
-@app.post("/chat/sql/execute", response_model=SqlExecuteOutput)
+@app.post(f"{TTS_API_PREFIX}/sql/execute", response_model=SqlExecuteOutput)
 def chat_sql_execute(payload: SqlExecuteInput):
     user_id = payload.user_id.strip()
     if not user_id:
@@ -686,7 +764,7 @@ def chat_sql_execute(payload: SqlExecuteInput):
     return response_payload
 
 
-@app.post("/chat/sql/test", response_model=SqlExecuteOutput)
+@app.post(f"{TTS_API_PREFIX}/sql/test", response_model=SqlExecuteOutput)
 def chat_sql_test(payload: SqlExecuteInput):
     user_id = payload.user_id.strip()
     if not user_id:
@@ -804,7 +882,7 @@ def chat_sql_test(payload: SqlExecuteInput):
     return response_payload
 
 
-@app.post("/chat/sql/table-more", response_model=SqlTableMoreOutput)
+@app.post(f"{TTS_API_PREFIX}/sql/table-more", response_model=SqlTableMoreOutput)
 def chat_sql_table_more(payload: SqlTableMoreInput) -> SqlTableMoreOutput:
     user_id = payload.user_id.strip()
     if not user_id:
@@ -923,7 +1001,7 @@ def chat_sql_table_more(payload: SqlTableMoreInput) -> SqlTableMoreOutput:
         has_more=has_more,
     )
 
-@app.post("/chat/context/questions", response_model=ContextQuestionOutput)
+@app.post(f"{TTS_API_PREFIX}/context/questions", response_model=ContextQuestionOutput)
 def generate_context_questions(payload: ContextQuestionInput):
     if not callable(run_promode):
         raise HTTPException(status_code=503, detail="질문 생성 기능이 비활성화되었습니다.")
@@ -954,7 +1032,7 @@ def generate_context_questions(payload: ContextQuestionInput):
     return {"questions": top_three}
 
 
-@app.post("/chat/context", response_model=ContextOutput)
+@app.post(f"{TTS_API_PREFIX}/context", response_model=ContextOutput)
 def save_context(payload: ContextSaveInput):
     if not callable(evidence_maker):
         raise HTTPException(status_code=503, detail="evidence_maker가 구성되지 않았습니다.")
@@ -1011,7 +1089,7 @@ def save_context(payload: ContextSaveInput):
     }
 
 
-@app.post("/chat/context/direct", response_model=ContextOutput)
+@app.post(f"{TTS_API_PREFIX}/context/direct", response_model=ContextOutput)
 def save_context_direct(payload: ContextDirectInput):
     user_id = payload.user_id.strip()
     if not user_id:
@@ -1041,7 +1119,7 @@ def save_context_direct(payload: ContextDirectInput):
     }
 
 
-@app.get("/chat/context/{user_id}")
+@app.get(f"{TTS_API_PREFIX}/context/{{user_id}}")
 def read_context_notes(user_id: str):
     trimmed = user_id.strip()
     if not trimmed:
@@ -1052,7 +1130,7 @@ def read_context_notes(user_id: str):
     return {"notes": notes}
 
 
-@app.get("/chat/db/list")
+@app.get(f"{TTS_API_PREFIX}/db/list")
 def read_db_list(user_id: Optional[str] = None):
     trimmed = (user_id or "").strip()
     if not trimmed:
@@ -1061,7 +1139,7 @@ def read_db_list(user_id: Optional[str] = None):
     return {"databases": session.get("db_list", [])}
 
 
-@app.get("/chat/db/{user_id}")
+@app.get(f"{TTS_API_PREFIX}/db/{{user_id}}")
 def read_current_db(user_id: str):
     trimmed = user_id.strip()
     if not trimmed:
@@ -1070,7 +1148,7 @@ def read_current_db(user_id: str):
     return {"db_id": session.get("db_id", "")}
 
 
-@app.post("/chat/db/select")
+@app.post(f"{TTS_API_PREFIX}/db/select")
 def select_db(payload: DbSelectInput):
     user_id = payload.user_id.strip()
     if not user_id:
@@ -1087,7 +1165,7 @@ def select_db(payload: DbSelectInput):
     return {"message": "DB를 변경했습니다.", "db_id": db_id}
 
 
-@app.post("/chat/db/upload")
+@app.post(f"{TTS_API_PREFIX}/db/upload")
 def upload_db_csv(
     user_id: str = Form(...),
     file: UploadFile = File(...),
@@ -1137,7 +1215,7 @@ def upload_db_csv(
     }
 
 
-@app.post("/chat/db/convert")
+@app.post(f"{TTS_API_PREFIX}/db/convert")
 def convert_db_csv(payload: DbConvertInput):
     user_id = payload.user_id.strip()
     if not user_id:
@@ -1286,7 +1364,7 @@ def convert_db_csv(payload: DbConvertInput):
     }
 
 
-@app.get("/")
+@app.get(TTS_UI_PREFIX)
 def read_root():
     index_path = STATIC_DIR / "index.html"
     if not index_path.exists():
@@ -1297,14 +1375,13 @@ def read_root():
     return FileResponse(index_path)
 
 
-@app.get("/api/info")
+@app.get(f"{TTS_API_PREFIX}/info")
 def api_info():
     return {
         "message": "SQL 파이프라인 없이 바로 대화하는 챗봇입니다.",
         "endpoints": {
-            "POST /chat": "대화를 시작합니다.",
-            "POST /chat/followup": "대화를 이어갑니다.",
-            "GET /chat/history/{user_id}": "현재까지의 대화 이력을 반환합니다.",
-            "GET /api/info": "API 정보를 제공합니다.",
+            f"POST {TTS_API_PREFIX}/chat": "대화를 시작합니다.",
+            f"GET {TTS_API_PREFIX}/history/{{user_id}}": "현재까지의 대화 이력을 반환합니다.",
+            f"GET {TTS_API_PREFIX}/info": "API 정보를 제공합니다.",
         },
     }
