@@ -1,5 +1,12 @@
-챗봇의 프론트엔드와 백엔드 파일이 있는 repository 입니다.
+# tts_service
 
-사용 시 OpenAI API KEY 설정 후 사용해야 합니다.
+`tts_service` 단독 안내 문서입니다.
 
-배포 경로/NGINX 라우팅 예시는 `DEPLOYMENT_NGINX.md`를 참고하세요.
+통합 설치/이식/운영 가이드는 상위 문서를 우선 참고하세요.
+- 통합 가이드: `../README.md`
+
+기존 참고 문서:
+- 배포 경로/NGINX 라우팅 가이드: `DEPLOYMENT_NGINX.md`
+- 실행 가능한 Nginx 설정: `deploy/nginx/default.conf`, `docker-compose.nginx.yml`
+
+기본 실행 시 OpenAI API 키를 포함한 환경 변수 설정이 필요합니다.

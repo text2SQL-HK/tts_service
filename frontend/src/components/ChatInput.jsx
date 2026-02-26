@@ -866,7 +866,7 @@ export default function ChatInput({
               <path
                 d="M12 5v14m0-14 5 5m-5-5-5 5"
                 fill="none"
-                stroke="#000000"
+                stroke="currentColor"
                 strokeWidth="2.6"
                 strokeLinecap="round"
                 strokeLinejoin="round"

@@ -13,7 +13,7 @@ import shutil
 import sqlite3
 import httpx
 import json
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,15 +24,20 @@ if __package__:
         _ensure_session,
         add_database,
         cleanup_inactive_sessions,
+        create_bug_report,
+        create_session_for_user,
         fetch_table_snapshot,
         fetch_timeline_page,
+        has_user_session,
         increment_sql_exec_count,
+        list_sessions_for_user,
         record_chat_message,
         record_system_event,
         record_tool_call,
         refresh_session_context_notes,
         refresh_session_history,
         save_context_note,
+        select_session_for_user,
         set_current_db,
     )
     from .config import (
@@ -55,15 +60,20 @@ else:
         _ensure_session,
         add_database,
         cleanup_inactive_sessions,
+        create_bug_report,
+        create_session_for_user,
         fetch_table_snapshot,
         fetch_timeline_page,
+        has_user_session,
         increment_sql_exec_count,
+        list_sessions_for_user,
         record_chat_message,
         record_system_event,
         record_tool_call,
         refresh_session_context_notes,
         refresh_session_history,
         save_context_note,
+        select_session_for_user,
         set_current_db,
     )
     from config import (
@@ -93,7 +103,6 @@ evidence_maker = getattr(_chat, "evidence_maker", None)
 run_colmaker = getattr(_pipeline, "run_colmaker", None)
 
 class PipelineInput(BaseModel):
-    user_id: str
     message: str
     mode: Optional[str] = "chat"
 
@@ -104,7 +113,6 @@ class PipelineOutput(BaseModel):
 
 
 class FollowUpInput(BaseModel):
-    user_id: str
     message: str
 
 
@@ -114,7 +122,6 @@ class FollowUpOutput(BaseModel):
     img: str
 
 class SqlExecuteInput(BaseModel):
-    user_id: str
     sql: str
 
 
@@ -131,7 +138,6 @@ class SqlExecuteOutput(BaseModel):
 
 
 class SqlJobFinalizeInput(BaseModel):
-    user_id: str
     job_id: str
 
 
@@ -142,7 +148,6 @@ class SqlJobFinalizeOutput(BaseModel):
 
 
 class SqlTableMoreInput(BaseModel):
-    user_id: str
     table_number: int
 
 
@@ -154,7 +159,6 @@ class SqlTableMoreOutput(BaseModel):
 
 
 class ContextQuestionInput(BaseModel):
-    user_id: str
     topic: str
 
 
@@ -163,7 +167,6 @@ class ContextQuestionOutput(BaseModel):
 
 
 class ContextSaveInput(BaseModel):
-    user_id: str
     topic: str
     questions: List[str]
     answers: List[str]
@@ -178,21 +181,55 @@ class ContextOutput(BaseModel):
 
 
 class ContextDirectInput(BaseModel):
-    user_id: str
     topic: Optional[str] = ""
     content: str
 
 
 class DbSelectInput(BaseModel):
-    user_id: str
     db_id: str
 
 
 class DbConvertInput(BaseModel):
-    user_id: str
     db_id: str
     csv_path: Optional[str] = None
     descriptions: Optional[Dict[str, Any]] = None
+
+
+class SessionSelectInput(BaseModel):
+    session_id: int
+
+
+class SessionSummaryOutput(BaseModel):
+    session_id: int
+    title: str
+    preview: str
+    message_count: int
+    created_at: str
+    last_accessed: str
+
+
+class SessionListOutput(BaseModel):
+    current_session_id: Optional[int] = None
+    sessions: List[SessionSummaryOutput]
+
+
+class SessionSwitchOutput(BaseModel):
+    session_id: int
+    db_id: str
+    history: Optional[List[Dict[str, Any]]] = None
+
+
+class BugReportInput(BaseModel):
+    description: str
+    version: Optional[str] = None
+    browser: Optional[str] = None
+
+
+class BugReportOutput(BaseModel):
+    id: int
+    reporter_id: str
+    created_at: str
+    status: str
 
 import re
 
@@ -486,6 +523,37 @@ def _normalize_path(path: str) -> str:
     return normalized or "/"
 
 
+def _normalize_session_text(value: Any, max_length: int) -> str:
+    raw_text = str(value or "")
+    compact = " ".join(raw_text.split())
+    if len(compact) <= max_length:
+        return compact
+    return f"{compact[: max_length - 1]}…"
+
+
+def _session_title(first_user_message: Any, session_id: int) -> str:
+    title = _normalize_session_text(first_user_message, 42)
+    if title:
+        return title
+    return f"새 대화 {session_id}"
+
+
+def _session_preview(last_message: Any) -> str:
+    preview = _normalize_session_text(last_message, 88)
+    if preview:
+        return preview
+    return "메시지가 없습니다."
+
+
+def _normalize_bug_text(value: Any, *, max_length: int, fallback: str = "") -> str:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    if len(text) > max_length:
+        return text[:max_length]
+    return text
+
+
 def _is_protected_tts_path(path: str) -> bool:
     normalized = _normalize_path(path)
     if normalized == TTS_STATIC_PREFIX or normalized.startswith(f"{TTS_STATIC_PREFIX}/"):
@@ -506,18 +574,51 @@ def _is_html_request(request: Request) -> bool:
     return "text/html" in accept
 
 
-async def _has_valid_login_session(token: str) -> bool:
+def _normalize_login_user_id(raw_user_id: Any) -> str:
+    if raw_user_id is None:
+        return ""
+    normalized = str(raw_user_id).strip().lower()
+    return normalized
+
+
+async def _fetch_login_user(token: str) -> Optional[Dict[str, Any]]:
     if not token:
-        return False
+        return None
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             response = await client.get(
                 LOGIN_AUTH_ME_URL,
                 cookies={AUTH_COOKIE_NAME: token},
             )
-        return response.status_code == 200
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return None
+        return payload
     except Exception:
-        return False
+        return None
+
+
+async def _resolve_login_user(request: Request) -> Optional[Dict[str, Any]]:
+    cached_user = getattr(request.state, "login_user", None)
+    if isinstance(cached_user, dict):
+        return cached_user
+    session_token = request.cookies.get(AUTH_COOKIE_NAME, "")
+    login_user = await _fetch_login_user(session_token)
+    if login_user is not None:
+        request.state.login_user = login_user
+    return login_user
+
+
+async def get_authenticated_user_id(request: Request) -> str:
+    login_user = await _resolve_login_user(request)
+    if login_user is None:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    user_id = _normalize_login_user_id(login_user.get("user_id"))
+    if not user_id or not is_valid_user_id(user_id):
+        raise HTTPException(status_code=500, detail="로그인 사용자 식별자가 유효하지 않습니다.")
+    return user_id
 
 
 app = FastAPI()
@@ -526,8 +627,8 @@ app = FastAPI()
 @app.middleware("http")
 async def require_login_for_tts(request: Request, call_next):
     if _is_protected_tts_path(request.url.path):
-        session_token = request.cookies.get(AUTH_COOKIE_NAME, "")
-        if not await _has_valid_login_session(session_token):
+        login_user = await _resolve_login_user(request)
+        if login_user is None:
             if _is_html_request(request):
                 return RedirectResponse(url=LOGIN_UI_PREFIX, status_code=307)
             return JSONResponse(status_code=401, content={"detail": "로그인이 필요합니다."})
@@ -554,14 +655,7 @@ if STATIC_DIR.exists():
 
 
 @app.post(f"{TTS_API_PREFIX}/chat", response_model=PipelineOutput)
-def chat(payload: PipelineInput):
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-
-    if not is_valid_user_id(user_id):
-        raise HTTPException(status_code=400, detail="user_id 형태가 잘못되었습니다. 영어, 숫자, _.-의 특수문자만 허용됩니다. 특수문자로 시작하면 안됩니다.")
-
+def chat(payload: PipelineInput, user_id: str = Depends(get_authenticated_user_id)):
     message = payload.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="message를 입력해 주세요.")
@@ -580,25 +674,133 @@ def chat(payload: PipelineInput):
     return payload
 
 
-@app.get(f"{TTS_API_PREFIX}/history/{{user_id}}")
-def chat_history(user_id: str):
-    user_id = user_id.strip()
-    if not user_id:
-        return {"history": []}
+@app.get(f"{TTS_API_PREFIX}/history")
+def chat_history(user_id: str = Depends(get_authenticated_user_id)):
     session = _ensure_session(user_id)
     refresh_session_history(session, user_id)
     return {"history": _visible_history(session.get("chat_history", []))}
 
 
+@app.get(f"{TTS_API_PREFIX}/sessions", response_model=SessionListOutput)
+def list_chat_sessions(user_id: str = Depends(get_authenticated_user_id)):
+    current_session = _ensure_session(user_id)
+    raw_current_session_id = current_session.get("session_id")
+    current_session_id: Optional[int] = None
+    try:
+        if raw_current_session_id is not None:
+            current_session_id = int(raw_current_session_id)
+    except Exception:
+        current_session_id = None
+
+    rows = list_sessions_for_user(user_id, limit=100)
+    sessions: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            session_id = int(row.get("session_id") or 0)
+        except Exception:
+            continue
+        if session_id <= 0:
+            continue
+        sessions.append(
+            {
+                "session_id": session_id,
+                "title": _session_title(row.get("first_user_message"), session_id),
+                "preview": _session_preview(row.get("last_message")),
+                "message_count": int(row.get("message_count") or 0),
+                "created_at": str(row.get("created_at") or ""),
+                "last_accessed": str(row.get("last_accessed") or ""),
+            }
+        )
+    return {"current_session_id": current_session_id, "sessions": sessions}
+
+
+@app.post(f"{TTS_API_PREFIX}/sessions", response_model=SessionSwitchOutput)
+def create_chat_session(user_id: str = Depends(get_authenticated_user_id)):
+    session = create_session_for_user(user_id)
+    history = refresh_session_history(session, user_id)
+    refresh_session_context_notes(session)
+    return {
+        "session_id": int(session.get("session_id") or 0),
+        "db_id": str(session.get("db_id") or ""),
+        "history": _visible_history(history),
+    }
+
+
+@app.post(f"{TTS_API_PREFIX}/sessions/select", response_model=SessionSwitchOutput)
+def select_chat_session(
+    payload: SessionSelectInput,
+    user_id: str = Depends(get_authenticated_user_id),
+):
+    session_id = int(payload.session_id or 0)
+    if session_id <= 0:
+        raise HTTPException(status_code=400, detail="session_id가 유효하지 않습니다.")
+    try:
+        session = select_session_for_user(user_id, session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+    history = refresh_session_history(session, user_id)
+    refresh_session_context_notes(session)
+    return {
+        "session_id": int(session.get("session_id") or 0),
+        "db_id": str(session.get("db_id") or ""),
+        "history": _visible_history(history),
+    }
+
+
+@app.post(f"{TTS_API_PREFIX}/bug-reports", response_model=BugReportOutput)
+def create_bug_report_ticket(
+    payload: BugReportInput,
+    request: Request,
+    user_id: str = Depends(get_authenticated_user_id),
+):
+    description = str(payload.description or "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="버그 설명을 입력해 주세요.")
+    if len(description) > 2000:
+        raise HTTPException(status_code=400, detail="버그 설명은 2000자 이하여야 합니다.")
+
+    version = _normalize_bug_text(payload.version, max_length=64, fallback="web-ui")
+    browser = _normalize_bug_text(
+        payload.browser,
+        max_length=128,
+        fallback=_normalize_bug_text(
+            request.headers.get("user-agent", ""),
+            max_length=128,
+            fallback="unknown",
+        ),
+    )
+
+    try:
+        created = create_bug_report(
+            reporter_id=user_id,
+            description=description,
+            version=version,
+            browser=browser,
+            status="open",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="버그 신고 저장에 실패했습니다.") from exc
+
+    return {
+        "id": int(created.get("id") or 0),
+        "reporter_id": str(created.get("reporter_id") or user_id),
+        "created_at": str(created.get("created_at") or ""),
+        "status": str(created.get("status") or "open"),
+    }
+
+
 @app.get(f"{TTS_API_PREFIX}/sessions/{{session_id}}/timeline")
 def get_session_timeline(
     session_id: int,
+    user_id: str = Depends(get_authenticated_user_id),
     before_created_at: Optional[str] = None,
     before_id: Optional[int] = None,
     limit: int = 50,
 ):
     if session_id <= 0:
         raise HTTPException(status_code=400, detail="session_id가 유효하지 않습니다.")
+    if not has_user_session(user_id, session_id):
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit은 1 이상 200 이하이어야 합니다.")
     if (before_created_at is None) != (before_id is None):
@@ -637,11 +839,10 @@ def get_session_timeline(
 
 
 @app.post(f"{TTS_API_PREFIX}/sql/execute", response_model=SqlExecuteOutput)
-def chat_sql_execute(payload: SqlExecuteInput):
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-
+def chat_sql_execute(
+    payload: SqlExecuteInput,
+    user_id: str = Depends(get_authenticated_user_id),
+):
     sql = payload.sql.strip()
     if not sql:
         raise HTTPException(status_code=400, detail="sql을 입력해 주세요.")
@@ -765,10 +966,10 @@ def chat_sql_execute(payload: SqlExecuteInput):
 
 
 @app.post(f"{TTS_API_PREFIX}/sql/test", response_model=SqlExecuteOutput)
-def chat_sql_test(payload: SqlExecuteInput):
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
+def chat_sql_test(
+    payload: SqlExecuteInput,
+    user_id: str = Depends(get_authenticated_user_id),
+):
     if test_sql is None:
         raise HTTPException(status_code=501, detail="test_sql 함수를 찾을 수 없습니다.")
 
@@ -883,10 +1084,10 @@ def chat_sql_test(payload: SqlExecuteInput):
 
 
 @app.post(f"{TTS_API_PREFIX}/sql/table-more", response_model=SqlTableMoreOutput)
-def chat_sql_table_more(payload: SqlTableMoreInput) -> SqlTableMoreOutput:
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
+def chat_sql_table_more(
+    payload: SqlTableMoreInput,
+    user_id: str = Depends(get_authenticated_user_id),
+) -> SqlTableMoreOutput:
     table_number = payload.table_number
     session = _ensure_session(user_id)
     table_results = session.setdefault("table_results", {})
@@ -1002,13 +1203,12 @@ def chat_sql_table_more(payload: SqlTableMoreInput) -> SqlTableMoreOutput:
     )
 
 @app.post(f"{TTS_API_PREFIX}/context/questions", response_model=ContextQuestionOutput)
-def generate_context_questions(payload: ContextQuestionInput):
+def generate_context_questions(
+    payload: ContextQuestionInput,
+    user_id: str = Depends(get_authenticated_user_id),
+):
     if not callable(run_promode):
         raise HTTPException(status_code=503, detail="질문 생성 기능이 비활성화되었습니다.")
-
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
 
     topic = payload.topic.strip()
     if not topic:
@@ -1033,13 +1233,12 @@ def generate_context_questions(payload: ContextQuestionInput):
 
 
 @app.post(f"{TTS_API_PREFIX}/context", response_model=ContextOutput)
-def save_context(payload: ContextSaveInput):
+def save_context(
+    payload: ContextSaveInput,
+    user_id: str = Depends(get_authenticated_user_id),
+):
     if not callable(evidence_maker):
         raise HTTPException(status_code=503, detail="evidence_maker가 구성되지 않았습니다.")
-
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
 
     topic = payload.topic.strip()
     if not topic:
@@ -1090,11 +1289,10 @@ def save_context(payload: ContextSaveInput):
 
 
 @app.post(f"{TTS_API_PREFIX}/context/direct", response_model=ContextOutput)
-def save_context_direct(payload: ContextDirectInput):
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-
+def save_context_direct(
+    payload: ContextDirectInput,
+    user_id: str = Depends(get_authenticated_user_id),
+):
     topic = (payload.topic or "").strip() or "직접 입력"
     content = payload.content.strip()
     if not content:
@@ -1119,41 +1317,31 @@ def save_context_direct(payload: ContextDirectInput):
     }
 
 
-@app.get(f"{TTS_API_PREFIX}/context/{{user_id}}")
-def read_context_notes(user_id: str):
-    trimmed = user_id.strip()
-    if not trimmed:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-    session = _ensure_session(trimmed)
+@app.get(f"{TTS_API_PREFIX}/context")
+def read_context_notes(user_id: str = Depends(get_authenticated_user_id)):
+    session = _ensure_session(user_id)
     refresh_session_context_notes(session)
     notes = session.get("context_notes", [])
     return {"notes": notes}
 
 
 @app.get(f"{TTS_API_PREFIX}/db/list")
-def read_db_list(user_id: Optional[str] = None):
-    trimmed = (user_id or "").strip()
-    if not trimmed:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-    session = _ensure_session(trimmed)
+def read_db_list(user_id: str = Depends(get_authenticated_user_id)):
+    session = _ensure_session(user_id)
     return {"databases": session.get("db_list", [])}
 
 
-@app.get(f"{TTS_API_PREFIX}/db/{{user_id}}")
-def read_current_db(user_id: str):
-    trimmed = user_id.strip()
-    if not trimmed:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-    session = _ensure_session(trimmed)
+@app.get(f"{TTS_API_PREFIX}/db")
+def read_current_db(user_id: str = Depends(get_authenticated_user_id)):
+    session = _ensure_session(user_id)
     return {"db_id": session.get("db_id", "")}
 
 
 @app.post(f"{TTS_API_PREFIX}/db/select")
-def select_db(payload: DbSelectInput):
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-
+def select_db(
+    payload: DbSelectInput,
+    user_id: str = Depends(get_authenticated_user_id),
+):
     db_id = payload.db_id.strip()
     if not db_id:
         raise HTTPException(status_code=400, detail="db_id를 입력해 주세요.")
@@ -1167,15 +1355,10 @@ def select_db(payload: DbSelectInput):
 
 @app.post(f"{TTS_API_PREFIX}/db/upload")
 def upload_db_csv(
-    user_id: str = Form(...),
     file: UploadFile = File(...),
     db_id: Optional[str] = Form(None),
+    user_id: str = Depends(get_authenticated_user_id),
 ):
-    trimmed_user_id = user_id.strip()
-    if not trimmed_user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-    if not is_valid_user_id(trimmed_user_id):
-        raise HTTPException(status_code=400, detail="user_id 형태가 잘못되었습니다.")
     filename = (file.filename or "").strip()
     if not filename:
         raise HTTPException(status_code=400, detail="CSV 파일 이름이 비어 있습니다.")
@@ -1187,7 +1370,7 @@ def upload_db_csv(
     if not safe_db_id:
         safe_db_id = f"csv_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
 
-    upload_root = APP_DIR / "uploads" / trimmed_user_id / safe_db_id
+    upload_root = APP_DIR / "uploads" / user_id / safe_db_id
     upload_root.mkdir(parents=True, exist_ok=True)
 
     base_name = _sanitize_db_identifier(Path(filename).stem) or "data"
@@ -1216,13 +1399,10 @@ def upload_db_csv(
 
 
 @app.post(f"{TTS_API_PREFIX}/db/convert")
-def convert_db_csv(payload: DbConvertInput):
-    user_id = payload.user_id.strip()
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id를 입력해 주세요.")
-    if not is_valid_user_id(user_id):
-        raise HTTPException(status_code=400, detail="user_id 형태가 잘못되었습니다.")
-
+def convert_db_csv(
+    payload: DbConvertInput,
+    user_id: str = Depends(get_authenticated_user_id),
+):
     db_id = payload.db_id.strip()
     if not db_id:
         raise HTTPException(status_code=400, detail="db_id를 입력해 주세요.")
@@ -1380,8 +1560,12 @@ def api_info():
     return {
         "message": "SQL 파이프라인 없이 바로 대화하는 챗봇입니다.",
         "endpoints": {
+            f"GET {TTS_API_PREFIX}/sessions": "현재 로그인 사용자의 세션 목록을 반환합니다.",
+            f"POST {TTS_API_PREFIX}/sessions": "새 세션을 생성하고 해당 세션으로 전환합니다.",
+            f"POST {TTS_API_PREFIX}/sessions/select": "선택한 세션으로 전환합니다.",
+            f"POST {TTS_API_PREFIX}/bug-reports": "버그 신고를 저장합니다.",
             f"POST {TTS_API_PREFIX}/chat": "대화를 시작합니다.",
-            f"GET {TTS_API_PREFIX}/history/{{user_id}}": "현재까지의 대화 이력을 반환합니다.",
+            f"GET {TTS_API_PREFIX}/history": "현재 로그인 사용자의 대화 이력을 반환합니다.",
             f"GET {TTS_API_PREFIX}/info": "API 정보를 제공합니다.",
         },
     }

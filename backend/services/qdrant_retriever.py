@@ -22,6 +22,14 @@ COLUMN_COLLECTION_NAME = "column_collection"
 TABLE_COLLECTION_NAME = "table_collection"
 
 DEFAULT_METADATA_DB_PATH = APP_DIR / "metadata" / "metadata.sqlite"
+ENABLE_RERANK = os.environ.get("ENABLE_RERANK", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "y",
+    "on",
+}
+RERANK_TOP_K = int(os.environ.get("RERANK_TOP_K", "7"))
 
 instruction = """
 You are selecting database columns that are likely required to write a correct SQL query for the user question.
@@ -54,9 +62,11 @@ def rerank(query: str, columns: List[str], context: str) -> List[Dict[str, Any]]
         "instruction": instruction.format(context=context),
         "documents": columns,
     }
-    resp = requests.post(RERANK_URL, json=payload)
+    resp = requests.post(RERANK_URL, json=payload, timeout=8)
     resp.raise_for_status()
-    return resp.json()["results"]
+    body = resp.json()
+    results = body.get("results", [])
+    return results if isinstance(results, list) else []
 
 
 class QdrantSchemaRetriever:
@@ -96,7 +106,7 @@ class QdrantSchemaRetriever:
         if not top_tables:
             return ""
         with sqlite3.connect(self.metadata_db_path) as conn:
-            return self._build_desc_str(conn, top_tables, question, context, top_k=7)
+            return self._build_desc_str(conn, top_tables, question, context)
 
     def _filter_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not self.db_id:
@@ -163,7 +173,6 @@ class QdrantSchemaRetriever:
         table_names: List[str],
         query: str,
         context: str,
-        top_k: int,
     ) -> str:
         desc_parts: List[str] = []
         for table_name in table_names:
@@ -182,9 +191,27 @@ class QdrantSchemaRetriever:
             ).fetchall()
             col_desc_list = [column_desc for (column_desc,) in col_rows]
             if col_desc_list:
-                ranked = rerank(query, col_desc_list, context)
-                limit = min(top_k, len(ranked))
-                for i in range(limit):
-                    desc_parts.append(f" {ranked[i]['document']}\n")
+                selected_columns = col_desc_list
+                if ENABLE_RERANK:
+                    try:
+                        ranked = rerank(query, col_desc_list, context)
+                        reranked_documents = [
+                            str(item.get("document", "")).strip()
+                            for item in ranked
+                            if isinstance(item, dict)
+                        ]
+                        reranked_documents = [doc for doc in reranked_documents if doc]
+                        if reranked_documents:
+                            limit = max(1, min(RERANK_TOP_K, len(reranked_documents)))
+                            selected_columns = reranked_documents[:limit]
+                    except Exception as exc:
+                        print(
+                            f"[RERANK] failed, fallback to full column list for table '{table_name}': {exc}"
+                        )
+
+                for column_desc in selected_columns:
+                    if not column_desc:
+                        continue
+                    desc_parts.append(f" {column_desc}\n")
             desc_parts.append("]\n")
         return "".join(desc_parts)

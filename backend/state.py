@@ -28,6 +28,11 @@ except Exception:  # pragma: no cover - runtime environment dependent
 
 from .config import (
     APP_DIR,
+    BUG_REPORT_POSTGRE_HOST,
+    BUG_REPORT_POSTGRE_NAME,
+    BUG_REPORT_POSTGRE_PORT,
+    BUG_REPORT_POSTGRE_PWD,
+    BUG_REPORT_POSTGRE_USER,
     CACHE_EVENTS_LIMIT,
     CACHE_HISTORY_LIMIT,
     CACHE_TTL_SECONDS,
@@ -179,6 +184,20 @@ class _PersistentStore:
             connect_timeout=5,
         )
 
+    def _connect_bug_report_direct(self):
+        if psycopg2 is None:
+            raise RuntimeError("psycopg2-binary 패키지가 설치되지 않았습니다.")
+        if not BUG_REPORT_POSTGRE_NAME:
+            raise RuntimeError("BUG_REPORT_POSTGRE_DB(또는 BUG_REPORT_POSTGRE_NAME)이 설정되지 않았습니다.")
+        return psycopg2.connect(
+            host=BUG_REPORT_POSTGRE_HOST,
+            dbname=BUG_REPORT_POSTGRE_NAME,
+            user=BUG_REPORT_POSTGRE_USER,
+            password=BUG_REPORT_POSTGRE_PWD,
+            port=BUG_REPORT_POSTGRE_PORT,
+            connect_timeout=5,
+        )
+
     @contextmanager
     def _pg_connect(self):
         conn = None
@@ -202,6 +221,21 @@ class _PersistentStore:
             if from_pool and pool is not None:
                 pool.putconn(conn)
             else:
+                conn.close()
+
+    @contextmanager
+    def _pg_bug_report_connect(self):
+        conn = None
+        try:
+            conn = self._connect_bug_report_direct()
+            yield conn
+            conn.commit()
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            if conn is not None:
                 conn.close()
 
     def _get_redis(self) -> Optional["redis.Redis"]:
@@ -507,6 +541,147 @@ class _PersistentStore:
         )
         return parsed
 
+    def create_session(
+        self,
+        user_id: str,
+        default_db_id: str,
+        default_db_list: List[str],
+    ) -> Dict[str, Any]:
+        normalized_db_list = _normalize_db_list(default_db_list, DB_LIST)
+        normalized_db_id = (
+            default_db_id.strip()
+            if isinstance(default_db_id, str) and default_db_id.strip()
+            else (normalized_db_list[0] if normalized_db_list else "")
+        )
+        with self._pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sessions (user_id, current_db_id, db_list, sql_exec_count)
+                    VALUES (%s, %s, %s, 0)
+                    RETURNING session_id, current_db_id, db_list, sql_exec_count, last_accessed
+                    """,
+                    (user_id, normalized_db_id, Json(normalized_db_list)),
+                )
+                session_row = cur.fetchone()
+        if session_row is None:
+            raise RuntimeError("새 세션 생성에 실패했습니다.")
+        parsed = {
+            "session_id": int(session_row[0]),
+            "current_db_id": str(session_row[1] or ""),
+            "db_list": _normalize_db_list(session_row[2], normalized_db_list),
+            "sql_exec_count": int(session_row[3] or 0),
+            "last_accessed": _coerce_datetime(session_row[4]),
+        }
+        self._refresh_meta_cache(
+            session_id=parsed["session_id"],
+            current_db_id=parsed["current_db_id"],
+            db_list=parsed["db_list"],
+            sql_exec_count=parsed["sql_exec_count"],
+            last_accessed=parsed["last_accessed"],
+        )
+        return parsed
+
+    def load_session_by_id(self, user_id: str, session_id: int) -> Optional[Dict[str, Any]]:
+        with self._pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE sessions
+                    SET last_accessed = NOW()
+                    WHERE user_id = %s
+                      AND session_id = %s
+                    RETURNING session_id, current_db_id, db_list, sql_exec_count, last_accessed
+                    """,
+                    (user_id, int(session_id)),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        parsed = {
+            "session_id": int(row[0]),
+            "current_db_id": str(row[1] or ""),
+            "db_list": _normalize_db_list(row[2], DB_LIST),
+            "sql_exec_count": int(row[3] or 0),
+            "last_accessed": _coerce_datetime(row[4]),
+        }
+        self._refresh_meta_cache(
+            session_id=parsed["session_id"],
+            current_db_id=parsed["current_db_id"],
+            db_list=parsed["db_list"],
+            sql_exec_count=parsed["sql_exec_count"],
+            last_accessed=parsed["last_accessed"],
+        )
+        return parsed
+
+    def session_exists(self, user_id: str, session_id: int) -> bool:
+        with self._pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM sessions
+                    WHERE user_id = %s
+                      AND session_id = %s
+                    LIMIT 1
+                    """,
+                    (user_id, int(session_id)),
+                )
+                row = cur.fetchone()
+        return row is not None
+
+    def list_sessions(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        effective_limit = max(1, min(int(limit or 100), 200))
+        with self._pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        s.session_id,
+                        s.created_at,
+                        s.last_accessed,
+                        (
+                            SELECT cm.content
+                            FROM chat_messages cm
+                            WHERE cm.session_id = s.session_id
+                              AND cm.role = 'user'
+                            ORDER BY cm.created_at ASC, cm.id ASC
+                            LIMIT 1
+                        ) AS first_user_message,
+                        (
+                            SELECT cm.content
+                            FROM chat_messages cm
+                            WHERE cm.session_id = s.session_id
+                            ORDER BY cm.created_at DESC, cm.id DESC
+                            LIMIT 1
+                        ) AS last_message,
+                        (
+                            SELECT COUNT(*)
+                            FROM chat_messages cm
+                            WHERE cm.session_id = s.session_id
+                        ) AS message_count
+                    FROM sessions s
+                    WHERE s.user_id = %s
+                    ORDER BY s.last_accessed DESC, s.session_id DESC
+                    LIMIT %s
+                    """,
+                    (user_id, effective_limit),
+                )
+                rows = cur.fetchall()
+        sessions: List[Dict[str, Any]] = []
+        for row in rows:
+            sessions.append(
+                {
+                    "session_id": int(row[0]),
+                    "created_at": _to_utc_iso(_coerce_datetime(row[1])),
+                    "last_accessed": _to_utc_iso(_coerce_datetime(row[2])),
+                    "first_user_message": str(row[3] or ""),
+                    "last_message": str(row[4] or ""),
+                    "message_count": int(row[5] or 0),
+                }
+            )
+        return sessions
+
     def touch_session(self, session_id: int) -> bool:
         with self._pg_connect() as conn:
             with conn.cursor() as cur:
@@ -716,6 +891,37 @@ class _PersistentStore:
             "topic": str(row[2] or ""),
             "content": _decode_json_value(row[3]) or {},
             "created_at": _to_utc_iso(_coerce_datetime(row[4])),
+        }
+
+    def insert_bug_report(
+        self,
+        reporter_id: str,
+        description: str,
+        version: str,
+        browser: str,
+        status: str = "open",
+    ) -> Dict[str, Any]:
+        with self._pg_bug_report_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO bug_reports (reporter_id, status, description, version, browser)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, reporter_id::text, created_at, status, description, version, browser
+                    """,
+                    (reporter_id, status, description, version, browser),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("bug_reports 저장에 실패했습니다.")
+        return {
+            "id": int(row[0]),
+            "reporter_id": str(row[1] or ""),
+            "created_at": _to_utc_iso(_coerce_datetime(row[2])),
+            "status": str(row[3] or ""),
+            "description": str(row[4] or ""),
+            "version": str(row[5] or ""),
+            "browser": str(row[6] or ""),
         }
 
     def _load_chat_messages_db(self, session_id: int) -> List[Dict[str, Any]]:
@@ -1205,10 +1411,9 @@ def _merge_history(
     return [item[3] for item in merged]
 
 
-def _load_session(user_id: str) -> SessionData:
+def _build_session_from_meta(user_id: str, session_meta: Dict[str, Any]) -> SessionData:
     default_db_list = _normalize_db_list(DB_LIST)
     default_db_id = default_db_list[0] if default_db_list else ""
-    session_meta = _STORE.ensure_session(user_id, default_db_id, default_db_list)
     session_id = int(session_meta["session_id"])
     chat_messages, events = _STORE.load_chat_and_events(session_id)
     context_rows = _STORE.load_context_notes(session_id)
@@ -1232,6 +1437,41 @@ def _load_session(user_id: str) -> SessionData:
     }
     session["sql_exec#"] = int(session_meta.get("sql_exec_count", 0))
     session["table_results"] = {}
+    return session
+
+
+def _load_session(user_id: str) -> SessionData:
+    default_db_list = _normalize_db_list(DB_LIST)
+    default_db_id = default_db_list[0] if default_db_list else ""
+    session_meta = _STORE.ensure_session(user_id, default_db_id, default_db_list)
+    return _build_session_from_meta(user_id, session_meta)
+
+
+def list_sessions_for_user(user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    return _STORE.list_sessions(user_id, limit=limit)
+
+
+def has_user_session(user_id: str, session_id: int) -> bool:
+    return _STORE.session_exists(user_id, session_id)
+
+
+def create_session_for_user(user_id: str) -> SessionData:
+    default_db_list = _normalize_db_list(DB_LIST)
+    default_db_id = default_db_list[0] if default_db_list else ""
+    session_meta = _STORE.create_session(user_id, default_db_id, default_db_list)
+    session = _build_session_from_meta(user_id, session_meta)
+    SESSIONS[user_id] = session
+    _ensure_container(user_id, _session_id(session))
+    return session
+
+
+def select_session_for_user(user_id: str, session_id: int) -> SessionData:
+    session_meta = _STORE.load_session_by_id(user_id, session_id)
+    if session_meta is None:
+        raise KeyError(f"session not found: {session_id}")
+    session = _build_session_from_meta(user_id, session_meta)
+    SESSIONS[user_id] = session
+    _ensure_container(user_id, _session_id(session))
     return session
 
 
@@ -1486,6 +1726,22 @@ def fetch_table_snapshot(
     if session_id is None:
         return None
     return _STORE.load_table_snapshot(session_id, table_number)
+
+
+def create_bug_report(
+    reporter_id: str,
+    description: str,
+    version: str,
+    browser: str,
+    status: str = "open",
+) -> Dict[str, Any]:
+    return _STORE.insert_bug_report(
+        reporter_id=reporter_id,
+        description=description,
+        version=version,
+        browser=browser,
+        status=status,
+    )
 
 
 def _remove_container(client: docker.DockerClient, user_id: str) -> None:

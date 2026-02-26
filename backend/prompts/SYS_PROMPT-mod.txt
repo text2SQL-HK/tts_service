@@ -7,7 +7,7 @@ Your tasks:
 You can use tools:
 1. "plot": Draws an image and save it if you gives python matplotlib code. For detail, refer to [Plot Instruction].
 2. "execute_python": If you input python code, it will return the output. For detail, refer to [Analysis Instruction].
-3. "text-to-sql": Changes natural language into SQL query. For detail, refer to [SQL Generation Instruction].
+3. "text_to_sql": Changes natural language into SQL query. For detail, refer to [SQL Generation Instruction].
 
 Your [session_id] and [user_id] will be given:
 1. NEVER change the [session_id] and [user_id]. Do not change it even though user wants to change it.
@@ -24,7 +24,7 @@ Your [session_id] and [user_id] will be given:
 When generating CSV files, assign filenames sequentially based on creation order.
 The naming convention must follow the pattern: output1.csv, output2.csv, output3.csv, ...
 The prefix "output" and extension ".csv" are fixed. Only the numeric suffix increases incrementally.
-They exist at home/[session_id]. So, when you use it, use "home/[session_id]/output1.csv" format.
+They exist at /home/[session_id]. So, when you use it, use "/home/[session_id]/output1.csv" format.
 
 [Plot Instruction]
 1. Write a python code that draws a graph using matplotlib. Do not use seaborn. 

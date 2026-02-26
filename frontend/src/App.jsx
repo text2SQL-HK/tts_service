@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import UserSetup from "./components/UserSetup.jsx";
 import MessageList from "./components/MessageList.jsx";
 import ChatInput from "./components/ChatInput.jsx";
 
-const DEFAULT_STATUS = "사용자 ID를 입력하면 대화를 시작할 수 있어요.";
+const DEFAULT_STATUS = "로그인 사용자 정보를 확인하는 중입니다.";
 const SQL_LOADING_MESSAGE = "SQL을 생성 중입니다...";
-const USER_ID_MAX_LENGTH = 255;
-const USER_ID_ALLOWED_PATTERN = /^[a-z0-9_.-]+$/;
-const USER_ID_START_PATTERN = /^[a-z0-9]/;
+const BUG_REPORT_MAX_LENGTH = 2000;
 const TTS_API_BASE = "/api/tts";
 const ttsApi = (path) => `${TTS_API_BASE}${path}`;
 const isInlineImage = (value) =>
@@ -135,10 +132,27 @@ const getLastAssistantSql = (history = []) => {
   return sqlSnippet;
 };
 
+const stripSqlLoadingMessages = (items = []) =>
+  items.filter(
+    (item) =>
+      !(
+        item?.role === "assistant" &&
+        item?.type === "loading" &&
+        item?.content === SQL_LOADING_MESSAGE
+      ),
+  );
 
 
-const resolveJson = async (url, options) => {
-  const response = await fetch(url, options);
+
+const resolveJson = async (url, options = {}) => {
+  const response = await fetch(url, {
+    credentials: "include",
+    ...options,
+  });
+  if (response.status === 401) {
+    window.location.href = "/login";
+    throw new Error("로그인이 필요합니다.");
+  }
   if (!response.ok) {
     let detail = "";
     try {
@@ -152,28 +166,52 @@ const resolveJson = async (url, options) => {
   return response.json();
 };
 
-const getUserIdValidationMessage = (value, { requireValue = false } = {}) => {
-  const trimmed = (value || "").trim();
-  if (!trimmed) {
-    return requireValue ? "사용자 ID를 입력해 주세요." : "";
+const formatSessionTimestamp = (value) => {
+  if (!value) {
+    return "";
   }
-  if (trimmed.length > USER_ID_MAX_LENGTH) {
-    return `사용자 ID는 최대 ${USER_ID_MAX_LENGTH}자까지 입력할 수 있어요.`;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
   }
-  if (!USER_ID_START_PATTERN.test(trimmed)) {
-    return "사용자 ID는 영문 소문자 또는 숫자로 시작해야 해요.";
+  const now = new Date();
+  const isSameDay =
+    parsed.getFullYear() === now.getFullYear() &&
+    parsed.getMonth() === now.getMonth() &&
+    parsed.getDate() === now.getDate();
+  if (isSameDay) {
+    return parsed.toLocaleTimeString("ko-KR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
-  if (!USER_ID_ALLOWED_PATTERN.test(trimmed)) {
-    return "사용자 ID는 영문 소문자, 숫자, '_', '-', '.'만 사용할 수 있어요.";
+  return parsed.toLocaleDateString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+  });
+};
+
+const getProfileInitial = (displayName, userId) => {
+  const source = String(displayName || userId || "").trim();
+  if (!source) {
+    return "?";
   }
-  return "";
+  return source.slice(0, 1).toUpperCase();
 };
 
 export default function App() {
-  const [pendingUserId, setPendingUserId] = useState("");
+  const [themeMode, setThemeMode] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem("tts-theme-mode");
+      return stored === "light" ? "light" : "dark";
+    } catch (_error) {
+      return "dark";
+    }
+  });
   const [currentUserId, setCurrentUserId] = useState("");
+  const [currentUsername, setCurrentUsername] = useState("");
   const [statusMessage, setStatusMessage] = useState(DEFAULT_STATUS);
-  const [userIdError, setUserIdError] = useState("");
+  const [authError, setAuthError] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
 
   const [tableMoreLoading, setTableMoreLoading] = useState({});
@@ -184,46 +222,37 @@ export default function App() {
   const [lastAssistantSql, setLastAssistantSql] = useState("");
   const [showSqlButton, setShowSqlButton] = useState(false);
   const [currentDbId, setCurrentDbId] = useState("");
+  const [sessionsSidebarOpen, setSessionsSidebarOpen] = useState(false);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionActionLoading, setSessionActionLoading] = useState(false);
+  const [sessionError, setSessionError] = useState("");
+  const [sessionList, setSessionList] = useState([]);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [profileActionLoading, setProfileActionLoading] = useState(false);
+  const [helpSubmenuOpen, setHelpSubmenuOpen] = useState(false);
+  const [bugReportModalOpen, setBugReportModalOpen] = useState(false);
+  const [bugReportDescription, setBugReportDescription] = useState("");
+  const [bugReportSubmitting, setBugReportSubmitting] = useState(false);
+  const [bugReportError, setBugReportError] = useState("");
+  const [bugReportSuccess, setBugReportSuccess] = useState("");
+  const [systemToastMessage, setSystemToastMessage] = useState("");
+  const profileMenuRef = useRef(null);
+  const helpSubmenuCloseTimerRef = useRef(null);
 
-
-
-
-  useEffect(() => {
-    const storedId = window.localStorage.getItem("chatbot_user_id");
-    if (storedId) {
-      setPendingUserId(storedId);
-      setUserIdError(getUserIdValidationMessage(storedId));
-      setStatusMessage(`${storedId}로 다시 시작하려면 '시작' 버튼을 눌러주세요.`);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (currentUserId) {
-      window.localStorage.setItem("chatbot_user_id", currentUserId);
-    }
-  }, [currentUserId]);
-
-  const handlePendingUserIdChange = (value) => {
-    setPendingUserId(value);
-    const message = getUserIdValidationMessage(value);
-    setUserIdError(message);
-    if (!currentUserId) {
-      setStatusMessage(message || DEFAULT_STATUS);
-    }
+  const applySessionHistory = (historyPayload) => {
+    const history = Array.isArray(historyPayload)
+      ? mapHistoryItems(historyPayload)
+      : [];
+    setChatHistory(history);
+    const sqlSnippet = getLastAssistantSql(history);
+    setLastAssistantSql(sqlSnippet);
+    setShowSqlButton(Boolean(sqlSnippet));
+    setTableMoreLoading({});
+    return history;
   };
 
-  const loadHistory = async (userId) => {
-    if (!userId) {
-      setChatHistory([]);
-      setLastAssistantSql("");
-      setSqlMode(false);
-      setSqlRunning(false);
-      setSqlTesting(false);
-      setShowSqlButton(false);
-      setTableMoreLoading({});
-      return;
-    }
-
+  const loadHistory = async () => {
     setChatHistory([
       {
         role: "assistant",
@@ -234,13 +263,8 @@ export default function App() {
     setTableMoreLoading({});
 
     try {
-      const data = await resolveJson(ttsApi(`/history/${encodeURIComponent(userId)}`));
-      const history = Array.isArray(data.history) ? mapHistoryItems(data.history) : [];
-      setChatHistory(history);
-      const sqlSnippet = getLastAssistantSql(history);
-      setLastAssistantSql(sqlSnippet);
-      setShowSqlButton(Boolean(sqlSnippet));
-      setTableMoreLoading({});
+      const data = await resolveJson(ttsApi("/history"));
+      applySessionHistory(data.history);
     } catch (error) {
       setChatHistory([
         {
@@ -258,9 +282,65 @@ export default function App() {
     }
   };
 
-  const loadUserDb = async (userId) => {
+  const fetchSessionList = async (userIdOverride = "") => {
+    const effectiveUserId = (userIdOverride || currentUserId || "").trim();
+    if (!effectiveUserId) {
+      return [];
+    }
+    setSessionsLoading(true);
+    setSessionError("");
     try {
-      const data = await resolveJson(ttsApi(`/db/${encodeURIComponent(userId)}`));
+      const data = await resolveJson(ttsApi("/sessions"));
+      const normalized = Array.isArray(data.sessions)
+        ? data.sessions
+          .map((item) => {
+            if (!item || typeof item !== "object") {
+              return null;
+            }
+            const sessionId =
+              typeof item.session_id === "number"
+                ? item.session_id
+                : Number(item.session_id);
+            if (!Number.isFinite(sessionId) || sessionId <= 0) {
+              return null;
+            }
+            return {
+              session_id: sessionId,
+              title:
+                typeof item.title === "string" && item.title.trim()
+                  ? item.title.trim()
+                  : `새 대화 ${sessionId}`,
+              preview:
+                typeof item.preview === "string" ? item.preview.trim() : "",
+              message_count:
+                typeof item.message_count === "number"
+                  ? item.message_count
+                  : Number(item.message_count) || 0,
+              created_at:
+                typeof item.created_at === "string" ? item.created_at : "",
+              last_accessed:
+                typeof item.last_accessed === "string" ? item.last_accessed : "",
+            };
+          })
+          .filter(Boolean)
+        : [];
+      setSessionList(normalized);
+      const rawCurrent = data.current_session_id;
+      const parsedCurrent =
+        typeof rawCurrent === "number" ? rawCurrent : Number(rawCurrent);
+      setCurrentSessionId(Number.isFinite(parsedCurrent) ? parsedCurrent : null);
+      return normalized;
+    } catch (error) {
+      setSessionError(error.message || "세션 목록을 불러오는 중 오류가 발생했습니다.");
+      return [];
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  const loadUserDb = async () => {
+    try {
+      const data = await resolveJson(ttsApi("/db"));
       const dbId = typeof data.db_id === "string" ? data.db_id.trim() : "";
       setCurrentDbId(dbId);
       return dbId;
@@ -271,15 +351,10 @@ export default function App() {
   };
 
   const fetchDbList = async () => {
-    const userId = (
-      currentUserId || window.localStorage.getItem("chatbot_user_id") || ""
-    ).trim();
-    if (!userId) {
-      throw new Error("사용자 ID를 먼저 설정해 주세요.");
+    if (!currentUserId) {
+      throw new Error("로그인 정보를 확인 중입니다.");
     }
-    const data = await resolveJson(
-      ttsApi(`/db/list?user_id=${encodeURIComponent(userId)}`),
-    );
+    const data = await resolveJson(ttsApi("/db/list"));
     const normalized = Array.isArray(data.databases)
       ? data.databases
         .map((item) => (typeof item === "string" ? item.trim() : ""))
@@ -291,7 +366,7 @@ export default function App() {
 
   const changeDb = async (dbId) => {
     if (!currentUserId) {
-      throw new Error("사용자 ID를 먼저 설정해 주세요.");
+      throw new Error("로그인 정보를 확인 중입니다.");
     }
     const trimmed = (dbId || "").trim();
     if (!trimmed) {
@@ -303,7 +378,6 @@ export default function App() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        user_id: currentUserId,
         db_id: trimmed,
       }),
     });
@@ -313,13 +387,12 @@ export default function App() {
 
   const uploadDbCsv = async ({ file, dbId }) => {
     if (!currentUserId) {
-      throw new Error("사용자 ID를 먼저 설정해 주세요.");
+      throw new Error("로그인 정보를 확인 중입니다.");
     }
     if (!file) {
       throw new Error("CSV 파일을 선택해 주세요.");
     }
     const formData = new FormData();
-    formData.append("user_id", currentUserId);
     formData.append("file", file);
     if (dbId && typeof dbId === "string" && dbId.trim()) {
       formData.append("db_id", dbId.trim());
@@ -332,7 +405,7 @@ export default function App() {
 
   const convertDbCsv = async ({ dbId, csvPath, descriptions }) => {
     if (!currentUserId) {
-      throw new Error("사용자 ID를 먼저 설정해 주세요.");
+      throw new Error("로그인 정보를 확인 중입니다.");
     }
     const trimmed = (dbId || "").trim();
     if (!trimmed) {
@@ -344,7 +417,6 @@ export default function App() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        user_id: currentUserId,
         db_id: trimmed,
         csv_path: csvPath || undefined,
         descriptions: descriptions || {},
@@ -352,47 +424,135 @@ export default function App() {
     });
   };
 
-  const activateUser = async (userId) => {
-    const trimmed = userId.trim();
-    const validationMessage = getUserIdValidationMessage(trimmed, {
-      requireValue: true,
-    });
-    if (validationMessage) {
-      setUserIdError(validationMessage);
-      setStatusMessage(validationMessage);
+  const createNewSession = async () => {
+    if (!currentUserId || sessionActionLoading) {
       return;
     }
-
-    if (currentUserId && currentUserId !== trimmed) {
-      // Clear relevant state if needed
+    setSessionActionLoading(true);
+    setSessionError("");
+    try {
+      const data = await resolveJson(ttsApi("/sessions"), {
+        method: "POST",
+      });
+      const rawSessionId = data.session_id;
+      const sessionId =
+        typeof rawSessionId === "number" ? rawSessionId : Number(rawSessionId);
+      if (Number.isFinite(sessionId) && sessionId > 0) {
+        setCurrentSessionId(sessionId);
+      }
+      const dbId = typeof data.db_id === "string" ? data.db_id.trim() : "";
+      setCurrentDbId(dbId);
+      applySessionHistory(data.history);
+      await fetchSessionList();
+      if (window.innerWidth <= 1024) {
+        setSessionsSidebarOpen(false);
+      }
+    } catch (error) {
+      setSessionError(error.message || "새 세션 생성에 실패했습니다.");
+    } finally {
+      setSessionActionLoading(false);
     }
-    setUserIdError("");
-    setCurrentUserId(trimmed);
-    setPendingUserId(trimmed);
-    setStatusMessage(`${trimmed}님, 대화를 시작해 보세요.`);
-    window.localStorage.setItem("chatbot_user_id", trimmed);
-    setSqlMode(false);
-    setCurrentDbId("");
-
-    await loadHistory(trimmed);
-    await loadUserDb(trimmed);
   };
 
-  const resetUser = () => {
-    setCurrentUserId("");
-    setPendingUserId("");
-    setChatHistory([]);
-    setStatusMessage(DEFAULT_STATUS);
-    setUserIdError("");
-    window.localStorage.removeItem("chatbot_user_id");
-    setSqlMode(false);
-    setSqlRunning(false);
-    setSqlTesting(false);
-    setLastAssistantSql("");
-    setShowSqlButton(false);
-    setCurrentDbId("");
-    setLoading(false);
+  const selectSession = async (sessionId) => {
+    const parsed =
+      typeof sessionId === "number" ? sessionId : Number(sessionId);
+    if (
+      !currentUserId ||
+      sessionActionLoading ||
+      !Number.isFinite(parsed) ||
+      parsed <= 0
+    ) {
+      return;
+    }
+    if (parsed === currentSessionId) {
+      if (window.innerWidth <= 1024) {
+        setSessionsSidebarOpen(false);
+      }
+      return;
+    }
+    setSessionActionLoading(true);
+    setSessionError("");
+    try {
+      const data = await resolveJson(ttsApi("/sessions/select"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ session_id: parsed }),
+      });
+      const rawSessionId = data.session_id;
+      const nextSessionId =
+        typeof rawSessionId === "number" ? rawSessionId : Number(rawSessionId);
+      if (Number.isFinite(nextSessionId) && nextSessionId > 0) {
+        setCurrentSessionId(nextSessionId);
+      }
+      const dbId = typeof data.db_id === "string" ? data.db_id.trim() : "";
+      setCurrentDbId(dbId);
+      applySessionHistory(data.history);
+      await fetchSessionList();
+      if (window.innerWidth <= 1024) {
+        setSessionsSidebarOpen(false);
+      }
+    } catch (error) {
+      setSessionError(error.message || "세션 전환에 실패했습니다.");
+    } finally {
+      setSessionActionLoading(false);
+    }
   };
+
+  useEffect(() => {
+    let active = true;
+
+    const bootstrap = async () => {
+      try {
+        const me = await resolveJson("/api/auth/me");
+        const rawUserId = typeof me?.user_id === "string" ? me.user_id : "";
+        const userId = rawUserId.trim().toLowerCase();
+        if (!userId) {
+          throw new Error("로그인 사용자 ID를 확인할 수 없습니다.");
+        }
+        const username =
+          typeof me?.username === "string" && me.username.trim()
+            ? me.username.trim()
+            : userId;
+        if (!active) {
+          return;
+        }
+        setCurrentUserId(userId);
+        setCurrentUsername(username);
+        setStatusMessage(`${username}님, 대화를 시작해 보세요.`);
+        setAuthError("");
+        setSqlMode(false);
+        setCurrentDbId("");
+        await loadHistory();
+        await loadUserDb();
+        await fetchSessionList(userId);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setCurrentUserId("");
+        setCurrentUsername("");
+        setCurrentSessionId(null);
+        setSessionList([]);
+        setSessionError("");
+        setProfileMenuOpen(false);
+        setProfileActionLoading(false);
+        setCurrentDbId("");
+        setChatHistory([]);
+        setLastAssistantSql("");
+        setShowSqlButton(false);
+        setStatusMessage("로그인 정보를 확인하지 못했습니다.");
+        setAuthError(error.message || "로그인 정보를 확인하지 못했습니다.");
+      }
+    };
+
+    bootstrap();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleSqlModeToggle = (nextValue) => {
     setSqlMode(Boolean(nextValue));
@@ -425,7 +585,6 @@ export default function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          user_id: currentUserId,
           message: trimmed,
           mode: sqlMode ? "sql" : "chat",
         }),
@@ -451,6 +610,7 @@ export default function App() {
           return updated;
         });
       }
+      await fetchSessionList();
     } catch (error) {
       setChatHistory((prev) => {
         const updated = [
@@ -484,7 +644,6 @@ export default function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          user_id: currentUserId,
           sql: lastAssistantSql,
         }),
       });
@@ -577,7 +736,6 @@ export default function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          user_id: currentUserId,
           sql: lastAssistantSql,
         }),
       });
@@ -671,7 +829,6 @@ export default function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          user_id: currentUserId,
           table_number: tableNumber,
         }),
       });
@@ -729,7 +886,7 @@ export default function App() {
 
   const generateContextQuestions = async (topic) => {
     if (!currentUserId) {
-      throw new Error("사용자 ID를 먼저 설정해 주세요.");
+      throw new Error("로그인 정보를 확인 중입니다.");
     }
     const trimmed = (topic || "").trim();
     if (!trimmed) {
@@ -741,7 +898,6 @@ export default function App() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        user_id: currentUserId,
         topic: trimmed,
       }),
     });
@@ -758,7 +914,7 @@ export default function App() {
 
   const saveContextAnswers = async ({ topic, questions, answers }) => {
     if (!currentUserId) {
-      throw new Error("사용자 ID를 먼저 설정해 주세요.");
+      throw new Error("로그인 정보를 확인 중입니다.");
     }
     const sanitizedTopic = (topic || "").trim();
     if (!sanitizedTopic) {
@@ -787,7 +943,6 @@ export default function App() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        user_id: currentUserId,
         topic: sanitizedTopic,
         questions: sanitizedQuestions,
         answers: sanitizedAnswers,
@@ -797,7 +952,7 @@ export default function App() {
 
   const saveFreeformContext = async ({ topic, content }) => {
     if (!currentUserId) {
-      throw new Error("사용자 ID를 먼저 설정해 주세요.");
+      throw new Error("로그인 정보를 확인 중입니다.");
     }
     const sanitizedContent = (content || "").trim();
     if (!sanitizedContent) {
@@ -809,7 +964,6 @@ export default function App() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        user_id: currentUserId,
         topic: (topic || "").trim(),
         content: sanitizedContent,
       }),
@@ -818,20 +972,216 @@ export default function App() {
 
   const fetchContextNotes = async () => {
     if (!currentUserId) {
-      throw new Error("사용자 ID를 먼저 설정해 주세요.");
+      throw new Error("로그인 정보를 확인 중입니다.");
     }
-    const data = await resolveJson(
-      ttsApi(`/context/${encodeURIComponent(currentUserId)}`),
-    );
+    const data = await resolveJson(ttsApi("/context"));
     const notes = Array.isArray(data.notes)
       ? data.notes.filter((note) => note && typeof note === "object")
       : [];
     return notes;
   };
 
+  const profileName = (currentUsername || currentUserId || "사용자").trim();
+  const profileHandle = currentUserId ? `@${currentUserId}` : "로그인 필요";
+  const profileInitial = getProfileInitial(profileName, currentUserId);
+  const themeToggleLabel = themeMode === "dark" ? "밝은 모드로 전환" : "다크 모드로 전환";
+  const bugDescriptionLength = bugReportDescription.length;
+  const frontendVersion = String(import.meta.env.VITE_APP_VERSION || "web-ui");
+
+  const closeBugReportModal = () => {
+    if (bugReportSubmitting) {
+      return;
+    }
+    setBugReportModalOpen(false);
+    setBugReportError("");
+    setBugReportSuccess("");
+  };
+
+  const openBugReportModal = () => {
+    setHelpSubmenuOpen(false);
+    setProfileMenuOpen(false);
+    setBugReportError("");
+    setBugReportSuccess("");
+    setBugReportModalOpen(true);
+  };
+
+  const clearHelpSubmenuCloseTimer = () => {
+    if (helpSubmenuCloseTimerRef.current) {
+      window.clearTimeout(helpSubmenuCloseTimerRef.current);
+      helpSubmenuCloseTimerRef.current = null;
+    }
+  };
+
+  const openHelpSubmenu = () => {
+    clearHelpSubmenuCloseTimer();
+    setHelpSubmenuOpen(true);
+  };
+
+  const scheduleCloseHelpSubmenu = () => {
+    clearHelpSubmenuCloseTimer();
+    helpSubmenuCloseTimerRef.current = window.setTimeout(() => {
+      setHelpSubmenuOpen(false);
+      helpSubmenuCloseTimerRef.current = null;
+    }, 220);
+  };
+
+  const submitBugReport = async () => {
+    if (!currentUserId || bugReportSubmitting) {
+      return;
+    }
+    const description = (bugReportDescription || "").trim();
+    if (!description) {
+      setBugReportError("어떤 문제가 발생했는지 입력해 주세요.");
+      setBugReportSuccess("");
+      return;
+    }
+    if (description.length > BUG_REPORT_MAX_LENGTH) {
+      setBugReportError(`버그 설명은 ${BUG_REPORT_MAX_LENGTH}자 이하로 입력해 주세요.`);
+      setBugReportSuccess("");
+      return;
+    }
+    setBugReportSubmitting(true);
+    setBugReportError("");
+    setBugReportSuccess("");
+    try {
+      await resolveJson(ttsApi("/bug-reports"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          description,
+          version: frontendVersion.slice(0, 64),
+          browser: String(window.navigator.userAgent || "unknown").slice(0, 128),
+        }),
+      });
+      setBugReportSuccess("");
+      setBugReportDescription("");
+      setBugReportModalOpen(false);
+      setSystemToastMessage("버그 리포트 감사합니다. 빠른 확인 후 조치하겠습니다.");
+    } catch (error) {
+      setBugReportError(error.message || "버그 신고 전송에 실패했습니다.");
+    } finally {
+      setBugReportSubmitting(false);
+    }
+  };
+
+  const handleSidebarProfileAction = async (action) => {
+    setProfileMenuOpen(false);
+    clearHelpSubmenuCloseTimer();
+    setHelpSubmenuOpen(false);
+    if (action === "toggle-theme") {
+      setThemeMode((prev) => (prev === "dark" ? "light" : "dark"));
+      return;
+    }
+    if (action === "open-bug-report") {
+      openBugReportModal();
+      return;
+    }
+    if (action === "logout") {
+      if (profileActionLoading) {
+        return;
+      }
+      setProfileActionLoading(true);
+      try {
+        await fetch("/api/auth/logout", {
+          method: "POST",
+          credentials: "include",
+        });
+      } catch (_error) {
+        // 로그아웃 요청 실패 시에도 로그인 화면으로 보낸다.
+      } finally {
+        window.location.href = "/login";
+      }
+      return;
+    }
+
+    if (action === "help") {
+      window.location.href = "/login";
+      return;
+    }
+    window.location.href = "/login/mypage";
+  };
+
+  useEffect(() => {
+    if (!sessionsSidebarOpen) {
+      setProfileMenuOpen(false);
+      clearHelpSubmenuCloseTimer();
+      setHelpSubmenuOpen(false);
+    }
+  }, [sessionsSidebarOpen]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("tts-theme-mode", themeMode);
+    } catch (_error) {
+      // 저장 실패 시 무시
+    }
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) {
+      clearHelpSubmenuCloseTimer();
+      setHelpSubmenuOpen(false);
+      return undefined;
+    }
+    const handlePointerDown = (event) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setProfileMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setProfileMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [profileMenuOpen]);
+
+  useEffect(
+    () => () => {
+      clearHelpSubmenuCloseTimer();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!bugReportModalOpen) {
+      return undefined;
+    }
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        closeBugReportModal();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [bugReportModalOpen, bugReportSubmitting]);
+
+  useEffect(() => {
+    if (!systemToastMessage) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => {
+      setSystemToastMessage("");
+    }, 2600);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [systemToastMessage]);
+
   const emptyMessage = currentUserId
     ? "안녕하세요! 무엇을 도와드릴까요?"
-    : "사용자 ID를 먼저 설정해 주세요.";
+    : "로그인 정보를 확인하는 중입니다.";
 
   // Dashboard Logic: Extract images and tables, and filter history
   const { allImages, allTables, filteredHistory } = useMemo(() => {
@@ -962,26 +1312,188 @@ export default function App() {
   const currentTable = allTables[activeTableIndex] || null;
 
   return (
-    <div className="app-layout">
+    <div className={`app-layout${themeMode === "light" ? " light-theme" : ""}`}>
       {/* Global Header */}
       <header className="global-header">
         <div className="header-content">
-
-          <UserSetup
-            pendingUserId={pendingUserId}
-            onUserIdChange={handlePendingUserIdChange}
-            onSubmit={() => activateUser(pendingUserId)}
-            statusMessage={statusMessage}
-            errorMessage={userIdError}
-            disabled={Boolean(currentUserId)}
-            onReset={resetUser}
-          />
+          <button
+            type="button"
+            className="session-toggle-button"
+            aria-label="세션 사이드바 열기"
+            aria-expanded={sessionsSidebarOpen}
+            onClick={() => setSessionsSidebarOpen((prev) => !prev)}
+          >
+            <span className="session-toggle-icon" />
+            <span className="session-toggle-icon" />
+            <span className="session-toggle-icon" />
+          </button>
+          <section className="user-setup">
+            <p className={`user-status${authError ? " user-status--error" : ""}`}>
+              {authError || statusMessage}
+            </p>
+          </section>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      {/* Main Content Area */}
-      <div className="content-split" ref={contentSplitRef}>
+      <div className="app-body">
+        <aside className={`session-sidebar${sessionsSidebarOpen ? " open" : ""}`}>
+          <div className="session-sidebar-header">
+            <h2>대화</h2>
+            <button
+              type="button"
+              className="session-new-button"
+              onClick={createNewSession}
+              disabled={!currentUserId || sessionActionLoading}
+            >
+              + 새 세션
+            </button>
+          </div>
+          <div className="session-sidebar-content">
+            {sessionError && (
+              <p className="session-sidebar-error">{sessionError}</p>
+            )}
+            {sessionsLoading ? (
+              <p className="session-sidebar-loading">세션 목록을 불러오는 중...</p>
+            ) : sessionList.length === 0 ? (
+              <p className="session-sidebar-empty">세션이 없습니다.</p>
+            ) : (
+              <div className="session-list">
+                {sessionList.map((session) => {
+                  const isActive = session.session_id === currentSessionId;
+                  return (
+                    <button
+                      type="button"
+                      key={session.session_id}
+                      className={`session-list-item${isActive ? " active" : ""}`}
+                      onClick={() => selectSession(session.session_id)}
+                      disabled={sessionActionLoading}
+                    >
+                      <span className="session-list-title">{session.title}</span>
+                      <span className="session-list-preview">
+                        {session.preview || "메시지가 없습니다."}
+                      </span>
+                      <span className="session-list-meta">
+                        {formatSessionTimestamp(session.last_accessed)} · {session.message_count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="session-sidebar-account" ref={profileMenuRef}>
+            {profileMenuOpen && (
+              <div className="session-account-menu" role="menu" aria-label="계정 메뉴">
+                <button
+                  type="button"
+                  className="session-account-menu-item"
+                  onClick={() => handleSidebarProfileAction("plan")}
+                >
+                  <span className="session-account-menu-icon session-account-menu-icon--plan" aria-hidden="true" />
+                  <span>플랜 업그레이드</span>
+                </button>
+                <button
+                  type="button"
+                  className="session-account-menu-item"
+                  onClick={() => handleSidebarProfileAction("personal")}
+                >
+                  <span className="session-account-menu-icon session-account-menu-icon--personal" aria-hidden="true" />
+                  <span>개인 맞춤 설정</span>
+                </button>
+                <button
+                  type="button"
+                  className="session-account-menu-item"
+                  onClick={() => handleSidebarProfileAction("toggle-theme")}
+                >
+                  <span className="session-account-menu-icon session-account-menu-icon--theme" aria-hidden="true" />
+                  <span>{themeToggleLabel}</span>
+                </button>
+                <button
+                  type="button"
+                  className="session-account-menu-item"
+                  onClick={() => handleSidebarProfileAction("settings")}
+                >
+                  <span className="session-account-menu-icon session-account-menu-icon--settings" aria-hidden="true" />
+                  <span>설정</span>
+                </button>
+                <div className="session-account-menu-divider" />
+                <div
+                  className="session-account-help-group"
+                  onMouseEnter={openHelpSubmenu}
+                  onMouseLeave={scheduleCloseHelpSubmenu}
+                >
+                  <button
+                    type="button"
+                    className="session-account-menu-item session-account-menu-item--with-arrow"
+                    onFocus={openHelpSubmenu}
+                    onClick={() => {
+                      if (helpSubmenuOpen) {
+                        clearHelpSubmenuCloseTimer();
+                        setHelpSubmenuOpen(false);
+                      } else {
+                        openHelpSubmenu();
+                      }
+                    }}
+                    aria-haspopup="menu"
+                    aria-expanded={helpSubmenuOpen}
+                  >
+                    <span className="session-account-menu-icon session-account-menu-icon--help" aria-hidden="true" />
+                    <span>도움말</span>
+                    <span className="session-account-menu-arrow" aria-hidden="true">›</span>
+                  </button>
+                  {helpSubmenuOpen && (
+                    <div
+                      className="session-help-submenu"
+                      role="menu"
+                      aria-label="도움말 메뉴"
+                      onMouseEnter={openHelpSubmenu}
+                      onMouseLeave={scheduleCloseHelpSubmenu}
+                    >
+                      <button
+                        type="button"
+                        className="session-help-submenu-item"
+                        onClick={() => handleSidebarProfileAction("open-bug-report")}
+                      >
+                        버그 신고
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="session-account-menu-item session-account-menu-item--danger"
+                  onClick={() => handleSidebarProfileAction("logout")}
+                  disabled={profileActionLoading}
+                >
+                  <span className="session-account-menu-icon session-account-menu-icon--logout" aria-hidden="true" />
+                  <span>{profileActionLoading ? "로그아웃 중..." : "로그아웃"}</span>
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              className={`session-account-trigger${profileMenuOpen ? " open" : ""}`}
+              onClick={() => setProfileMenuOpen((prev) => !prev)}
+              disabled={!currentUserId || profileActionLoading}
+              aria-haspopup="menu"
+              aria-expanded={profileMenuOpen}
+            >
+              <span className="session-account-avatar">{profileInitial}</span>
+              <span className="session-account-text">
+                <span className="session-account-name">{profileName}</span>
+                <span className="session-account-handle">{profileHandle}</span>
+              </span>
+              <span className="session-account-tier">Plus</span>
+            </button>
+          </div>
+        </aside>
+
+        {/* Main Content Area */}
+        {/* Main Content Area */}
+        <div
+          className={`content-split${sessionsSidebarOpen ? " sidebar-open" : ""}`}
+          ref={contentSplitRef}
+        >
 
         {/* Left Panel: Dashboard (Plot & Table) */}
         {/* Left Panel: Dashboard (Plot & Table) */}
@@ -1092,6 +1604,81 @@ export default function App() {
           </div>
         </div>
       </div>
+      </div>
+      {systemToastMessage && (
+        <div className="system-toast system-toast-success" role="status" aria-live="polite">
+          {systemToastMessage}
+        </div>
+      )}
+      {bugReportModalOpen && (
+        <div
+          className="context-modal-backdrop bug-report-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="버그 신고"
+          onClick={closeBugReportModal}
+        >
+          <div
+            className="context-modal bug-report-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="context-modal-header">
+              <div className="context-modal-title">
+                <h2>무슨 일이 일어났나요?</h2>
+              </div>
+              <button
+                type="button"
+                className="context-close-button"
+                aria-label="버그 신고 닫기"
+                onClick={closeBugReportModal}
+                disabled={bugReportSubmitting}
+              >
+                ×
+              </button>
+            </div>
+            <textarea
+              className="context-modal-textarea bug-report-textarea"
+              value={bugReportDescription}
+              onChange={(event) => {
+                setBugReportDescription(event.target.value.slice(0, BUG_REPORT_MAX_LENGTH));
+                setBugReportError("");
+                setBugReportSuccess("");
+              }}
+              placeholder="어떤 문제가 일어났는지 알려주세요"
+              maxLength={BUG_REPORT_MAX_LENGTH}
+              rows={9}
+              disabled={bugReportSubmitting}
+            />
+            <p className="bug-report-counter">
+              {bugDescriptionLength}/{BUG_REPORT_MAX_LENGTH}자 사용
+            </p>
+            {bugReportError && (
+              <p className="context-modal-feedback error">{bugReportError}</p>
+            )}
+            {bugReportSuccess && (
+              <p className="context-modal-feedback success">{bugReportSuccess}</p>
+            )}
+            <div className="context-modal-actions bug-report-actions">
+              <button
+                type="button"
+                className="context-primary-button bug-report-submit"
+                onClick={submitBugReport}
+                disabled={bugReportSubmitting}
+              >
+                {bugReportSubmitting ? "전송 중..." : "보내기"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {sessionsSidebarOpen && (
+        <button
+          type="button"
+          className="session-sidebar-backdrop"
+          onClick={() => setSessionsSidebarOpen(false)}
+          aria-label="세션 사이드바 닫기"
+        />
+      )}
     </div>
   );
 }
