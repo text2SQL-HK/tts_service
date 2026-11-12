@@ -64,7 +64,7 @@ Take care of [Context].
 {context}
 """
 
-client = OpenAI(base_url="http://127.0.0.1:8001/v1", api_key="dummy")
+client = OpenAI(base_url=os.environ.get("EMBEDDING_BASE_URL", "http://localhost:8001/v1"), api_key=os.environ.get("EMBEDDING_API_KEY") or "EMPTY")
 
 def replace_bracket_value(s: str, new_value: str) -> str:
     before, rest = s.split("[", 1)
@@ -102,7 +102,7 @@ def _get_graph_retriever(db_id: Optional[str]) -> QdrantSchemaRetriever:
     return retriever
 
 #--- RAG 벡터 스페이스 load ------------------------------------------------------------
-persist_dir = APP_DIR / "vectorstores" / "faiss_store"
+persist_dir = Path(os.environ.get("FAISS_INDEX_PATH") or (APP_DIR / "vectorstores" / "faiss_store"))
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 vectorstore = FAISS.load_local(

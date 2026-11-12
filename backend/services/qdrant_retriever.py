@@ -12,7 +12,7 @@ from qdrant_client import QdrantClient
 from ..config import APP_DIR, RERANK_URL
 
 
-OPENAI_BASE_URL = "http://127.0.0.1:8001/v1"
+OPENAI_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "http://localhost:8001/v1")
 EMBED_MODEL = "/workspace/models/Qwen3-Embedding-0.6B"
 
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
@@ -21,7 +21,7 @@ QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 COLUMN_COLLECTION_NAME = "column_collection"
 TABLE_COLLECTION_NAME = "table_collection"
 
-DEFAULT_METADATA_DB_PATH = APP_DIR / "metadata" / "metadata.sqlite"
+DEFAULT_METADATA_DB_PATH = Path(os.environ.get("METADATA_DB_PATH") or (APP_DIR / "metadata" / "metadata.sqlite"))
 
 instruction = """
 You are selecting database columns that are likely required to write a correct SQL query for the user question.
