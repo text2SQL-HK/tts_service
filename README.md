@@ -10,3 +10,7 @@
 - 실행 가능한 Nginx 설정: `deploy/nginx/default.conf`, `docker-compose.nginx.yml`
 
 기본 실행 시 OpenAI API 키를 포함한 환경 변수 설정이 필요합니다.
+
+## Private configuration
+
+See [SECURITY_SETUP.md](SECURITY_SETUP.md) before running. Private data and credentials must be supplied separately.
